@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import sqlite3
 from datetime import date, datetime, timedelta
 from contextlib import contextmanager
@@ -941,3 +942,180 @@ class FinanceRepository:
                     matching_items.append(item)
 
         return matching_items
+
+    # ------------------------------------------------------------------
+    # CSV Import / Export
+    # ------------------------------------------------------------------
+
+    def export_to_csv(self, directory: str | Path) -> dict[str, int]:
+        """Export all data to CSV files in the given directory.
+
+        Returns a dict mapping table name to row count exported.
+        """
+        output_dir = Path(directory)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        counts: dict[str, int] = {}
+
+        # categories.csv
+        categories = self.list_categories()
+        with open(output_dir / "categories.csv", "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=["name", "kind"])
+            writer.writeheader()
+            for c in categories:
+                writer.writerow({"name": c.name, "kind": c.kind})
+        counts["categories"] = len(categories)
+
+        # transactions.csv
+        with self._connection() as conn:
+            rows = conn.execute(
+                "SELECT kind, amount, category, description, occurred_on FROM transactions ORDER BY occurred_on ASC, id ASC"
+            ).fetchall()
+        with open(output_dir / "transactions.csv", "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=["kind", "amount", "category", "description", "occurred_on"])
+            writer.writeheader()
+            for row in rows:
+                writer.writerow(dict(row))
+        counts["transactions"] = len(rows)
+
+        # recurring_items.csv
+        with self._connection() as conn:
+            rows = conn.execute(
+                "SELECT kind, amount, category, description, interval_count, interval_unit, "
+                "start_on, next_run_on, last_run_on, is_active FROM recurring_items ORDER BY id ASC"
+            ).fetchall()
+        with open(output_dir / "recurring_items.csv", "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(
+                f,
+                fieldnames=["kind", "amount", "category", "description", "interval_count",
+                            "interval_unit", "start_on", "next_run_on", "last_run_on", "is_active"],
+            )
+            writer.writeheader()
+            for row in rows:
+                writer.writerow(dict(row))
+        counts["recurring_items"] = len(rows)
+
+        # budgets.csv
+        with self._connection() as conn:
+            rows = conn.execute(
+                "SELECT year, month, category, kind, budgeted_amount, notes FROM budgets ORDER BY year ASC, month ASC, category ASC"
+            ).fetchall()
+        with open(output_dir / "budgets.csv", "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=["year", "month", "category", "kind", "budgeted_amount", "notes"])
+            writer.writeheader()
+            for row in rows:
+                writer.writerow(dict(row))
+        counts["budgets"] = len(rows)
+
+        return counts
+
+    def import_from_csv(self, directory: str | Path, clear_first: bool = False) -> dict[str, int]:
+        """Import data from CSV files in the given directory.
+
+        Args:
+            directory: Path containing categories.csv, transactions.csv,
+                       recurring_items.csv, and/or budgets.csv.
+            clear_first: If True, wipe all existing data before importing.
+
+        Returns a dict mapping table name to row count imported.
+        """
+        input_dir = Path(directory)
+        counts: dict[str, int] = {}
+
+        if clear_first:
+            with self._connection() as conn:
+                conn.execute("DELETE FROM budgets")
+                conn.execute("DELETE FROM recurring_items")
+                conn.execute("DELETE FROM transactions")
+                conn.execute("DELETE FROM categories")
+
+        # categories.csv
+        cat_file = input_dir / "categories.csv"
+        if cat_file.exists():
+            imported = 0
+            with open(cat_file, newline="", encoding="utf-8") as f:
+                for row in csv.DictReader(f):
+                    name = row.get("name", "").strip()
+                    kind = row.get("kind", "").strip()
+                    if name and kind in ("expense", "income"):
+                        self.ensure_category(name, kind)
+                        imported += 1
+            counts["categories"] = imported
+
+        # transactions.csv
+        tx_file = input_dir / "transactions.csv"
+        if tx_file.exists():
+            imported = 0
+            with open(tx_file, newline="", encoding="utf-8") as f:
+                for row in csv.DictReader(f):
+                    try:
+                        occurred = date.fromisoformat(row["occurred_on"].strip())
+                        self.add_transaction(
+                            kind=row["kind"].strip(),
+                            amount=float(row["amount"]),
+                            category=row["category"].strip(),
+                            description=row["description"].strip(),
+                            occurred_on=occurred,
+                        )
+                        imported += 1
+                    except (KeyError, ValueError):
+                        continue
+            counts["transactions"] = imported
+
+        # recurring_items.csv
+        ri_file = input_dir / "recurring_items.csv"
+        if ri_file.exists():
+            imported = 0
+            with open(ri_file, newline="", encoding="utf-8") as f:
+                for row in csv.DictReader(f):
+                    try:
+                        start = date.fromisoformat(row["start_on"].strip())
+                        next_run = date.fromisoformat(row["next_run_on"].strip())
+                        is_active = str(row.get("is_active", "1")).strip() in ("1", "True", "true")
+                        with self._connection() as conn:
+                            conn.execute(
+                                """
+                                INSERT INTO recurring_items
+                                    (kind, amount, category, description, interval_count,
+                                     interval_unit, start_on, next_run_on, last_run_on, is_active)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                """,
+                                (
+                                    row["kind"].strip(),
+                                    float(row["amount"]),
+                                    row["category"].strip(),
+                                    row["description"].strip(),
+                                    int(row["interval_count"]),
+                                    row.get("interval_unit", "months").strip(),
+                                    start.isoformat(),
+                                    next_run.isoformat(),
+                                    row.get("last_run_on", "").strip() or None,
+                                    1 if is_active else 0,
+                                ),
+                            )
+                        self.ensure_category(row["category"].strip(), row["kind"].strip())
+                        imported += 1
+                    except (KeyError, ValueError):
+                        continue
+            counts["recurring_items"] = imported
+
+        # budgets.csv
+        bud_file = input_dir / "budgets.csv"
+        if bud_file.exists():
+            imported = 0
+            with open(bud_file, newline="", encoding="utf-8") as f:
+                for row in csv.DictReader(f):
+                    try:
+                        self.add_or_update_budget(
+                            year=int(row["year"]),
+                            month=int(row["month"]),
+                            category=row["category"].strip(),
+                            kind=row["kind"].strip(),
+                            budgeted_amount=float(row["budgeted_amount"]),
+                            notes=row.get("notes", "").strip(),
+                        )
+                        imported += 1
+                    except (KeyError, ValueError):
+                        continue
+            counts["budgets"] = imported
+
+        return counts

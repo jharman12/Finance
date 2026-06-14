@@ -1,0 +1,34 @@
+kind,amount,category,description,occurred_on
+income,5000.00,Salary,Monthly salary,2026-05-01
+income,5000.00,Salary,Monthly salary,2026-06-01
+expense,1500.00,Mortgage,Mortgage payment,2026-05-01
+expense,1500.00,Mortgage,Mortgage payment,2026-06-01
+expense,300.00,Groceries,Weekly grocery run,2026-05-05
+expense,120.00,Groceries,Weekly grocery run,2026-05-12
+expense,135.00,Groceries,Weekly grocery run,2026-05-19
+expense,110.00,Groceries,Weekly grocery run,2026-05-26
+expense,290.00,Groceries,Weekly grocery run,2026-06-02
+expense,90.00,Utilities,Electric bill,2026-05-08
+expense,55.00,Utilities,Water bill,2026-05-10
+expense,95.00,Utilities,Electric bill,2026-06-08
+expense,200.00,Transport,Gas,2026-05-07
+expense,180.00,Transport,Gas,2026-06-07
+expense,150.00,Car Insurance,Car insurance premium,2026-05-01
+expense,150.00,Car Insurance,Car insurance premium,2026-06-01
+expense,85.00,Internet,Internet bill,2026-05-03
+expense,85.00,Internet,Internet bill,2026-06-03
+expense,65.00,Phone,Phone plan,2026-05-03
+expense,65.00,Phone,Phone plan,2026-06-03
+expense,25.00,Subscriptions,Netflix,2026-05-15
+expense,15.00,Subscriptions,Spotify,2026-05-15
+expense,25.00,Subscriptions,Netflix,2026-06-15
+expense,15.00,Subscriptions,Spotify,2026-06-15
+expense,120.00,Dining,Restaurant dinner,2026-05-10
+expense,45.00,Dining,Lunch out,2026-05-14
+expense,80.00,Dining,Date night dinner,2026-05-22
+expense,95.00,Dining,Restaurant dinner,2026-06-07
+expense,60.00,Entertainment,Movie tickets,2026-05-18
+expense,40.00,Entertainment,Board game night,2026-05-25
+expense,75.00,Health,Gym membership,2026-05-01
+expense,75.00,Health,Gym membership,2026-06-01
+expense,200.00,Health,Doctor visit,2026-05-20

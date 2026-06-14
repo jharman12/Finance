@@ -1,0 +1,12 @@
+year,month,category,kind,budgeted_amount,notes
+2026,6,Groceries,expense,650.00,
+2026,6,Transport,expense,200.00,
+2026,6,Utilities,expense,160.00,
+2026,6,Dining,expense,250.00,
+2026,6,Entertainment,expense,100.00,
+2026,6,Health,expense,100.00,Recurring item (auto-allocated)
+2026,6,Mortgage,expense,1500.00,Recurring item (auto-allocated)
+2026,6,Car Insurance,expense,150.00,Recurring item (auto-allocated)
+2026,6,Internet,expense,85.00,Recurring item (auto-allocated)
+2026,6,Phone,expense,65.00,Recurring item (auto-allocated)
+2026,6,Subscriptions,expense,40.00,Recurring item (auto-allocated)

@@ -1,0 +1,24 @@
+name,kind
+Groceries,expense
+Transport,expense
+Utilities,expense
+Health,expense
+Entertainment,expense
+Dining,expense
+Mortgage,expense
+Car Insurance,expense
+Internet,expense
+Phone,expense
+Subscriptions,expense
+Clothing,expense
+Personal Care,expense
+Home Maintenance,expense
+Gifts,expense
+Charity,expense
+Education,expense
+Travel,expense
+Other,expense
+Salary,income
+Investments,income
+Freelance,income
+Other Income,income

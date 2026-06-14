@@ -10,11 +10,13 @@ from PyQt5.QtGui import QFont, QPalette, QColor
 from PyQt5.QtWidgets import (
     QApplication,
     QAbstractItemView,
+    QAction,
     QCheckBox,
     QComboBox,
     QDateEdit,
     QDialog,
     QDoubleSpinBox,
+    QFileDialog,
     QFormLayout,
     QFrame,
     QGridLayout,
@@ -142,6 +144,7 @@ class MainWindow(QMainWindow):
         self._build_recurring_tab()
         self._build_budget_tab()
         self._build_assistant_tab()
+        self._build_menu_bar()
         
         # Load saved model preference
         saved_model = self.repository.get_setting("selected_model")
@@ -1140,6 +1143,76 @@ class MainWindow(QMainWindow):
         input_row.addWidget(self.chat_input, 1)
         input_row.addWidget(self.send_button)
         layout.addLayout(input_row)
+
+    def _build_menu_bar(self) -> None:
+        menu_bar = self.menuBar()
+
+        file_menu = menu_bar.addMenu("File")
+
+        export_action = QAction("Export data to CSV...", self)
+        export_action.setStatusTip("Export all transactions, categories, recurring items and budgets to CSV files")
+        export_action.triggered.connect(self._handle_export_csv)
+        file_menu.addAction(export_action)
+
+        import_action = QAction("Import data from CSV...", self)
+        import_action.setStatusTip("Import CSV seed files into the database")
+        import_action.triggered.connect(self._handle_import_csv)
+        file_menu.addAction(import_action)
+
+    def _handle_export_csv(self) -> None:
+        directory = QFileDialog.getExistingDirectory(
+            self,
+            "Select export directory",
+            "seeds",
+        )
+        if not directory:
+            return
+        try:
+            counts = self.repository.export_to_csv(directory)
+            summary = "\n".join(f"  {table}: {n} rows" for table, n in counts.items())
+            QMessageBox.information(
+                self,
+                "Export complete",
+                f"Exported to:\n{directory}\n\n{summary}\n\nCommit these CSV files to share with your team.",
+            )
+            self.status_bar.showMessage(f"Exported to {directory}", 5000)
+        except Exception as exc:
+            QMessageBox.critical(self, "Export failed", str(exc))
+
+    def _handle_import_csv(self) -> None:
+        directory = QFileDialog.getExistingDirectory(
+            self,
+            "Select seeds directory to import",
+            "seeds",
+        )
+        if not directory:
+            return
+
+        reply = QMessageBox.question(
+            self,
+            "Import CSV data",
+            "How do you want to import?\n\n"
+            "• Yes  — clear all existing data first, then import (full reset)\n"
+            "• No   — add imported data on top of existing data\n"
+            "• Cancel — abort",
+            QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel,
+            QMessageBox.Cancel,
+        )
+        if reply == QMessageBox.Cancel:
+            return
+
+        clear_first = reply == QMessageBox.Yes
+        try:
+            counts = self.repository.import_from_csv(directory, clear_first=clear_first)
+            if not counts:
+                QMessageBox.information(self, "Import", "No CSV files found in the selected directory.")
+                return
+            summary = "\n".join(f"  {table}: {n} rows" for table, n in counts.items())
+            QMessageBox.information(self, "Import complete", f"Imported from:\n{directory}\n\n{summary}")
+            self.refresh_all()
+            self.status_bar.showMessage("Import complete.", 4000)
+        except Exception as exc:
+            QMessageBox.critical(self, "Import failed", str(exc))
 
     def _apply_styles(self) -> None:
         font = QFont("Segoe UI")
