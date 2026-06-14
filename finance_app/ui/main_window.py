@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import date
 import calendar
+import html
+import re
 
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
@@ -43,6 +45,7 @@ from PyQt5.QtWidgets import (
 from finance_app.config import APP_NAME
 from finance_app.models import AssistantResult, Transaction
 from finance_app.services.assistant_service import AssistantService
+from finance_app.services.voice_pipeline import VoiceCoordinator
 from finance_app.storage import FinanceRepository
 
 
@@ -105,10 +108,17 @@ class MetricCard(QFrame):
 
 
 class MainWindow(QMainWindow):
+    voice_status_signal = pyqtSignal(str)
+    voice_error_signal = pyqtSignal(str)
+    voice_wake_signal = pyqtSignal(str)
+    voice_command_signal = pyqtSignal(str)
+
     def __init__(self) -> None:
         super().__init__()
         self.repository = FinanceRepository()
         self.assistant_service = AssistantService(self.repository)
+        self.voice_coordinator = VoiceCoordinator(wake_phrase="hey steven")
+        self.voice_enabled = False
         self._assistant_worker: AssistantWorker | None = None
         self._ollama_warmup_worker: OllamaWarmupWorker | None = None
         self._selected_year = date.today().year
@@ -145,6 +155,17 @@ class MainWindow(QMainWindow):
         self._build_budget_tab()
         self._build_assistant_tab()
         self._build_menu_bar()
+
+        # Route all voice callbacks through Qt signals so UI updates always run on the main thread.
+        self.voice_status_signal.connect(self._handle_voice_status)
+        self.voice_error_signal.connect(self._handle_voice_error)
+        self.voice_wake_signal.connect(self._handle_voice_wake)
+        self.voice_command_signal.connect(self._handle_voice_command)
+
+        self.voice_coordinator.on_status = self.voice_status_signal.emit
+        self.voice_coordinator.on_error = self.voice_error_signal.emit
+        self.voice_coordinator.on_wake = self.voice_wake_signal.emit
+        self.voice_coordinator.on_command = self.voice_command_signal.emit
         
         # Load saved model preference
         saved_model = self.repository.get_setting("selected_model")
@@ -224,6 +245,9 @@ class MainWindow(QMainWindow):
         layout.addWidget(splitter, 1)
 
         dashboard_actions = QHBoxLayout()
+        self.edit_recent_button = QPushButton("Edit Selected Recent Entry")
+        self.edit_recent_button.clicked.connect(self.edit_selected_recent_transaction)
+        dashboard_actions.addWidget(self.edit_recent_button)
         self.delete_recent_button = QPushButton("Delete Selected Recent Entry")
         self.delete_recent_button.clicked.connect(lambda: self.delete_selected_transaction(self.recent_table))
         dashboard_actions.addWidget(self.delete_recent_button)
@@ -1115,6 +1139,15 @@ class MainWindow(QMainWindow):
         layout.addWidget(title)
         layout.addWidget(subtitle)
 
+        voice_row = QHBoxLayout()
+        self.voice_toggle_button = QPushButton("Start Voice (Hey Steven)")
+        self.voice_toggle_button.clicked.connect(self._toggle_voice_listener)
+        self.voice_status_label = QLabel("Voice: Off")
+        self.voice_status_label.setObjectName("PageSubtitle")
+        voice_row.addWidget(self.voice_toggle_button)
+        voice_row.addWidget(self.voice_status_label, 1)
+        layout.addLayout(voice_row)
+
         # Model selector
         model_selector_row = QHBoxLayout()
         model_label = QLabel("Ollama Model:")
@@ -1846,6 +1879,97 @@ class MainWindow(QMainWindow):
             self.income_amount.setValue(0.0)
             self.income_description.clear()
 
+    def edit_selected_recent_transaction(self) -> None:
+        current_row = self.recent_table.currentRow()
+        if current_row < 0:
+            QMessageBox.information(self, APP_NAME, "Select a recent transaction to edit first.")
+            return
+
+        id_item = self.recent_table.item(current_row, 0)
+        transaction_id = id_item.data(Qt.UserRole) if id_item is not None else None
+        if transaction_id is None:
+            QMessageBox.warning(self, APP_NAME, "Could not determine selected transaction ID.")
+            return
+
+        transaction = self.repository.get_transaction_by_id(int(transaction_id))
+        if transaction is None:
+            QMessageBox.warning(self, APP_NAME, "Selected transaction no longer exists.")
+            self.refresh_all()
+            return
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Edit Recent Transaction")
+        dialog.setMinimumWidth(480)
+        form = QFormLayout(dialog)
+
+        kind_label = QLabel(transaction.kind.title())
+        form.addRow("Type", kind_label)
+
+        amount_spin = QDoubleSpinBox()
+        amount_spin.setMaximum(1_000_000)
+        amount_spin.setDecimals(2)
+        amount_spin.setPrefix("$")
+        amount_spin.setValue(float(transaction.amount))
+        form.addRow("Amount", amount_spin)
+
+        category_combo = QComboBox()
+        category_combo.setEditable(True)
+        categories = self.repository.list_categories(transaction.kind)
+        category_combo.addItems([c.name for c in categories])
+        category_combo.setCurrentText(transaction.category)
+        form.addRow("Category", category_combo)
+
+        description_edit = QLineEdit()
+        description_edit.setText(transaction.description)
+        form.addRow("Description", description_edit)
+
+        date_edit = QDateEdit()
+        date_edit.setCalendarPopup(True)
+        date_edit.setDate(QDate(transaction.occurred_on.year, transaction.occurred_on.month, transaction.occurred_on.day))
+        form.addRow("Date", date_edit)
+
+        button_row = QHBoxLayout()
+        save_button = QPushButton("Save Changes")
+        cancel_button = QPushButton("Cancel")
+        button_row.addWidget(save_button)
+        button_row.addWidget(cancel_button)
+        form.addRow(button_row)
+
+        def save_changes() -> None:
+            amount = amount_spin.value()
+            category = category_combo.currentText().strip()
+            description = description_edit.text().strip()
+            occurred_on = self._qdate_to_date(date_edit.date())
+
+            if amount <= 0:
+                QMessageBox.warning(dialog, APP_NAME, "Amount must be greater than zero.")
+                return
+            if not category:
+                QMessageBox.warning(dialog, APP_NAME, "Category is required.")
+                return
+            if not description:
+                QMessageBox.warning(dialog, APP_NAME, "Description is required.")
+                return
+
+            updated = self.repository.update_transaction(
+                transaction_id=int(transaction_id),
+                amount=amount,
+                category=category,
+                description=description,
+                occurred_on=occurred_on,
+            )
+            if not updated:
+                QMessageBox.critical(dialog, APP_NAME, "Failed to update transaction.")
+                return
+
+            self.status_bar.showMessage("Recent transaction updated.", 4000)
+            self.refresh_all()
+            dialog.accept()
+
+        save_button.clicked.connect(save_changes)
+        cancel_button.clicked.connect(dialog.reject)
+        dialog.exec_()
+
     def delete_selected_transaction(self, table: QTableWidget) -> None:
         selected_rows = sorted({index.row() for index in table.selectionModel().selectedRows()})
         if not selected_rows:
@@ -1964,8 +2088,43 @@ class MainWindow(QMainWindow):
         self.repository.set_setting("selected_model", model_name)
         self.status_bar.showMessage(f"Switched to model: {model_name}", 3000)
 
+    def _toggle_voice_listener(self) -> None:
+        if not self.voice_enabled:
+            self.voice_coordinator.start()
+            self.voice_enabled = True
+            self.voice_toggle_button.setText("Stop Voice")
+            self.voice_status_label.setText("Voice: Listening for 'Hey Steven'...")
+            self.status_bar.showMessage("Voice listener started.", 3000)
+            return
+
+        self.voice_coordinator.stop()
+        self.voice_enabled = False
+        self.voice_toggle_button.setText("Start Voice (Hey Steven)")
+        self.voice_status_label.setText("Voice: Off")
+        self.status_bar.showMessage("Voice listener stopped.", 3000)
+
+    def _handle_voice_status(self, message: str) -> None:
+        self.voice_status_label.setText(f"Voice: {message}")
+        self.status_bar.showMessage(message, 2500)
+
+    def _handle_voice_error(self, message: str) -> None:
+        self.voice_status_label.setText("Voice: Error")
+        self.status_bar.showMessage(message, 6000)
+        self.chat_log.append(f"<i>Voice error:</i> {html.escape(message)}")
+
+    def _handle_voice_wake(self, source_id: str) -> None:
+        self.chat_log.append(f"<i>Wake detected from {html.escape(source_id)}. Listening...</i>")
+
+    def _handle_voice_command(self, command_text: str) -> None:
+        if not command_text.strip():
+            return
+        self.chat_input.setText(command_text)
+        self.chat_log.append(f"<b>You (voice):</b> {html.escape(command_text)}")
+        self.send_prompt()
+
     def _handle_assistant_result(self, result: AssistantResult) -> None:
-        response_lines = [f"<b>Assistant:</b> {result.reply}"]
+        formatted_reply = self._format_assistant_reply_html(result.reply)
+        response_lines = [f"<b>Assistant:</b> {formatted_reply}"]
         if result.applied_actions:
             response_lines.append("<i>Applied:</i> " + "; ".join(result.applied_actions))
         for table_payload in result.display_tables:
@@ -1974,6 +2133,193 @@ class MainWindow(QMainWindow):
         self.status_bar.showMessage("Assistant response complete.", 4000)
         self.send_button.setEnabled(True)
         self.refresh_all()
+
+    def _format_assistant_reply_html(self, reply_text: str) -> str:
+        """Render assistant text as structured HTML while preserving all content."""
+        if not reply_text:
+            return ""
+
+        lines = reply_text.splitlines()
+        chunks: list[str] = []
+        i = 0
+
+        while i < len(lines):
+            line = lines[i].rstrip("\n")
+            stripped = line.strip()
+
+            if not stripped:
+                chunks.append("<br>")
+                i += 1
+                continue
+
+            # Markdown heading support
+            heading_match = re.match(r"^(#{1,6})\s+(.+)$", stripped)
+            if heading_match:
+                level = min(6, len(heading_match.group(1)) + 1)
+                chunks.append(f"<h{level} style='margin:8px 0 4px 0; color:#f5f8ff;'>{html.escape(heading_match.group(2))}</h{level}>")
+                i += 1
+                continue
+
+            # Section heading support (e.g., "Summary:" or "Recommendations")
+            if self._looks_like_section_heading(stripped):
+                chunks.append(f"<h4 style='margin:8px 0 4px 0; color:#f5f8ff;'>{html.escape(stripped.rstrip(':'))}</h4>")
+                i += 1
+                continue
+
+            # Markdown/simple table support
+            if "|" in stripped:
+                table_html, consumed = self._parse_text_table(lines, i)
+                if consumed > 0:
+                    chunks.append(table_html)
+                    i += consumed
+                    continue
+
+            # Numbered list support
+            if re.match(r"^\s*\d+[\.)]\s+", line):
+                list_items: list[str] = []
+                while i < len(lines) and re.match(r"^\s*\d+[\.)]\s+", lines[i]):
+                    item_text = re.sub(r"^\s*\d+[\.)]\s+", "", lines[i].strip())
+                    list_items.append(f"<li>{html.escape(item_text)}</li>")
+                    i += 1
+                chunks.append("<ol style='margin:4px 0 8px 18px;'>" + "".join(list_items) + "</ol>")
+                continue
+
+            # Bullet list support
+            if re.match(r"^\s*[-*•]\s+", line):
+                bullet_lines: list[str] = []
+                while i < len(lines) and re.match(r"^\s*[-*•]\s+", lines[i]):
+                    item_text = re.sub(r"^\s*[-*•]\s+", "", lines[i].strip())
+                    bullet_lines.append(item_text)
+                    i += 1
+
+                # If bullets are numeric category lines, render a compact bar chart style.
+                chart_html = self._build_inline_bar_chart_html(bullet_lines)
+                if chart_html:
+                    chunks.append(chart_html)
+                else:
+                    chunks.append(
+                        "<ul style='margin:4px 0 8px 16px;'>"
+                        + "".join(f"<li>{html.escape(item)}</li>" for item in bullet_lines)
+                        + "</ul>"
+                    )
+                continue
+
+            # Default paragraph
+            chunks.append(f"<p style='margin:4px 0; white-space:pre-wrap;'>{html.escape(stripped)}</p>")
+            i += 1
+
+        return "".join(chunks)
+
+    def _looks_like_section_heading(self, text: str) -> bool:
+        if len(text) > 60:
+            return False
+        if text.endswith(":"):
+            return True
+        normalized = text.lower().strip()
+        known_headings = {
+            "summary",
+            "recommendations",
+            "overspending check",
+            "where your money is going",
+            "breakdown",
+            "action plan",
+            "next steps",
+            "financial health assessment",
+        }
+        return normalized in known_headings
+
+    def _parse_text_table(self, lines: list[str], start_index: int) -> tuple[str, int]:
+        table_lines: list[str] = []
+        i = start_index
+        while i < len(lines):
+            candidate = lines[i].strip()
+            if not candidate or "|" not in candidate:
+                break
+            table_lines.append(candidate)
+            i += 1
+
+        if len(table_lines) < 2:
+            return "", 0
+
+        # Detect markdown separator row like |---|---|
+        separator_idx = -1
+        for idx, row in enumerate(table_lines):
+            if re.match(r"^\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?$", row):
+                separator_idx = idx
+                break
+
+        # Header + body parsing
+        header_cells = self._split_table_row(table_lines[0])
+        if not header_cells:
+            return "", 0
+
+        body_start = separator_idx + 1 if separator_idx >= 0 else 1
+        body_rows = [self._split_table_row(row) for row in table_lines[body_start:] if self._split_table_row(row)]
+
+        header_html = "".join(
+            f"<th style='text-align:left; padding:6px 8px; border-bottom:1px solid #314055;'>{html.escape(cell)}</th>"
+            for cell in header_cells
+        )
+        body_html = "".join(
+            "<tr>"
+            + "".join(
+                f"<td style='padding:6px 8px; border-bottom:1px solid #1d2736;'>{html.escape(cell)}</td>"
+                for cell in row
+            )
+            + "</tr>"
+            for row in body_rows
+        )
+
+        table_html = (
+            "<table cellspacing='0' cellpadding='0' style='margin:6px 0; width:100%; border-collapse:collapse; background-color:#0f1722;'>"
+            f"<thead><tr>{header_html}</tr></thead>"
+            f"<tbody>{body_html}</tbody>"
+            "</table>"
+        )
+        return table_html, len(table_lines)
+
+    def _split_table_row(self, row: str) -> list[str]:
+        trimmed = row.strip().strip("|")
+        if not trimmed:
+            return []
+        return [cell.strip() for cell in trimmed.split("|")]
+
+    def _build_inline_bar_chart_html(self, bullet_lines: list[str]) -> str:
+        """Render bullet lines like 'Dining: $320.50' as an inline horizontal bar chart."""
+        parsed: list[tuple[str, float]] = []
+        for line in bullet_lines:
+            match = re.search(r"^(.*?):\s*\$?([0-9][0-9,]*(?:\.[0-9]+)?)", line)
+            if not match:
+                continue
+            label = match.group(1).strip()
+            value = float(match.group(2).replace(",", ""))
+            parsed.append((label, value))
+
+        if len(parsed) < 2:
+            return ""
+
+        max_value = max(value for _, value in parsed)
+        if max_value <= 0:
+            return ""
+
+        rows_html = []
+        for label, value in parsed:
+            width_pct = max(2.0, (value / max_value) * 100.0)
+            rows_html.append(
+                "<div style='display:flex; align-items:center; gap:8px; margin:3px 0;'>"
+                f"<div style='min-width:140px; color:#c9d7e8;'>{html.escape(label)}</div>"
+                "<div style='flex:1; background:#182333; border-radius:4px; overflow:hidden; height:12px;'>"
+                f"<div style='width:{width_pct:.1f}%; height:12px; background:#2ec4b6;'></div>"
+                "</div>"
+                f"<div style='min-width:88px; text-align:right; color:#e7edf7;'>${value:,.2f}</div>"
+                "</div>"
+            )
+
+        return (
+            "<div style='margin:6px 0 10px 0; padding:8px; background:#0f1722; border:1px solid #233247; border-radius:8px;'>"
+            + "".join(rows_html)
+            + "</div>"
+        )
 
     def _format_assistant_table_html(self, table_payload: dict[str, object]) -> str:
         title = str(table_payload.get("title", "Table"))
@@ -2016,6 +2362,12 @@ class MainWindow(QMainWindow):
         self.chat_log.append(f"<b>Assistant error:</b> {error_text}")
         self.status_bar.showMessage("Assistant failed to respond.", 5000)
         self.send_button.setEnabled(True)
+
+    def closeEvent(self, event) -> None:  # type: ignore[override]
+        try:
+            self.voice_coordinator.stop()
+        finally:
+            super().closeEvent(event)
 
 
 def run_application() -> None:

@@ -92,6 +92,16 @@ class AssistantService:
             )
             if completion_result is not None:
                 raw_response, payload = completion_result
+
+        # Final guardrail: if analysis is still incomplete after retry, generate
+        # a deterministic local breakdown from repository data.
+        final_reply_text = str(payload.get("reply", "")).strip()
+        if self._is_analysis_question(prompt_text) and self._is_response_incomplete(final_reply_text):
+            payload = {
+                "reply": self._build_local_budget_analysis(),
+                "actions": [],
+            }
+            raw_response = json.dumps(payload)
         
         result = AssistantResult(
             reply=str(payload.get("reply", "")) or raw_response,
@@ -221,6 +231,20 @@ class AssistantService:
             # If it has some action content but is still quite short (maybe just one brief recommendation)
             if len(reply_text) < 200:
                 return True
+
+        # Intro-only replies often contain these phrases but no concrete breakdown.
+        intro_only_markers = (
+            "detailed analysis of your current budget",
+            "comprehensive analysis of your current budget",
+            "here is the breakdown and my recommendations",
+            "here is the comprehensive analysis",
+        )
+        has_intro_only_marker = any(marker in reply_lower for marker in intro_only_markers)
+        has_structured_breakdown = any(marker in reply_text for marker in ["1)", "2)", "3)", "- ", "\n\n"]) and (
+            "$" in reply_text or "%" in reply_text
+        )
+        if has_intro_only_marker and not has_structured_breakdown:
+            return True
         
         # Check if it ends mid-sentence (no punctuation)
         if last_line and not any(last_line.endswith(p) for p in ['.', '!', '?', '"', "'"]):
@@ -266,6 +290,103 @@ class AssistantService:
             pass
         
         return None
+
+    def _build_local_budget_analysis(self) -> str:
+        """Generate a complete budget analysis directly from local data."""
+        today = date.today()
+        year = today.year
+        month = today.month
+
+        snapshot = self.repository.snapshot_for_month(year, month)
+        expense_breakdown = self.repository.expense_breakdown_for_month(year, month)
+        budgets = self.repository.list_budgets_for_month(year, month, kind="expense")
+
+        total_income = snapshot.income_total
+        total_expense = snapshot.expense_total
+        net = snapshot.net_total
+        savings_rate = (net / total_income * 100.0) if total_income > 0 else 0.0
+
+        top_lines: list[str] = []
+        for category, amount in expense_breakdown[:5]:
+            pct = (amount / total_expense * 100.0) if total_expense > 0 else 0.0
+            top_lines.append(f"- {category}: ${amount:,.2f} ({pct:.1f}% of expenses)")
+
+        over_budget_lines: list[str] = []
+        for budget in budgets:
+            over = budget.actual_spent - budget.budgeted_amount
+            if over > 0:
+                over_budget_lines.append(
+                    f"- {budget.category}: over by ${over:,.2f} (spent ${budget.actual_spent:,.2f} vs budget ${budget.budgeted_amount:,.2f})"
+                )
+        over_budget_lines.sort(reverse=True)
+
+        recommendations: list[str] = []
+
+        # Recommendation 1: immediate over-budget controls.
+        if over_budget_lines:
+            recommendations.append(
+                "1) Fix over-budget categories first: cap spend this month in the categories above and set hard weekly limits."
+            )
+        else:
+            recommendations.append(
+                "1) Keep current category limits: no categories are over budget right now; maintain this and keep weekly spend caps."
+            )
+
+        # Recommendation 2: focus biggest spend category.
+        if expense_breakdown:
+            top_category, top_amount = expense_breakdown[0]
+            target_cut = top_amount * 0.10
+            recommendations.append(
+                f"2) Reduce your top category ({top_category}) by 10% next month to save about ${target_cut:,.2f}."
+            )
+
+        # Recommendation 3: savings target guidance.
+        if total_income > 0:
+            if savings_rate < 20.0:
+                needed = (0.20 * total_income) - net
+                recommendations.append(
+                    f"3) Increase savings rate toward 20%: you are at {savings_rate:.1f}%. Redirect about ${max(needed, 0.0):,.2f}/month into savings."
+                )
+            else:
+                recommendations.append(
+                    f"3) Savings rate is {savings_rate:.1f}% (healthy). Consider raising automatic savings by an extra 2-5% of income."
+                )
+        else:
+            recommendations.append(
+                "3) No income recorded this month. Add income entries to get accurate savings-rate guidance."
+            )
+
+        # Recommendation 4: recurring review.
+        recurring = self.repository.list_recurring_items(active_only=True)
+        if recurring:
+            recurring_total = sum(item.amount for item in recurring if item.kind == "expense")
+            recommendations.append(
+                f"4) Audit recurring expenses (${recurring_total:,.2f}/cycle total): cancel or downgrade 1-2 low-value subscriptions/services."
+            )
+
+        # Recommendation 5: operating cadence.
+        recommendations.append(
+            "5) Run a weekly budget check: compare actual vs budget by category every 7 days and adjust discretionary spending immediately."
+        )
+
+        top_text = "\n".join(top_lines) if top_lines else "- No expense data for this month yet."
+        over_text = "\n".join(over_budget_lines[:5]) if over_budget_lines else "- None detected this month."
+        rec_text = "\n".join(recommendations)
+
+        return (
+            f"Budget Analysis ({year}-{month:02d})\n\n"
+            f"Summary\n"
+            f"- Income: ${total_income:,.2f}\n"
+            f"- Expenses: ${total_expense:,.2f}\n"
+            f"- Net: ${net:,.2f}\n"
+            f"- Savings rate: {savings_rate:.1f}%\n\n"
+            f"Where Your Money Is Going\n"
+            f"{top_text}\n\n"
+            f"Overspending Check\n"
+            f"{over_text}\n\n"
+            f"Recommendations\n"
+            f"{rec_text}"
+        )
 
     def _retry_with_action_enforcement(
         self,

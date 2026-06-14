@@ -343,6 +343,70 @@ class FinanceRepository:
             cursor = connection.execute("DELETE FROM transactions WHERE id = ?", (int(transaction_id),))
             return cursor.rowcount > 0
 
+    def get_transaction_by_id(self, transaction_id: int) -> Transaction | None:
+        with self._connection() as connection:
+            row = connection.execute(
+                """
+                SELECT id, kind, amount, category, description, occurred_on, created_at
+                FROM transactions
+                WHERE id = ?
+                """,
+                (int(transaction_id),),
+            ).fetchone()
+
+        if not row:
+            return None
+
+        return Transaction(
+            id=row["id"],
+            kind=row["kind"],
+            amount=float(row["amount"]),
+            category=row["category"],
+            description=row["description"],
+            occurred_on=datetime.strptime(row["occurred_on"], "%Y-%m-%d").date(),
+            created_at=datetime.fromisoformat(row["created_at"]) if row["created_at"] else None,
+        )
+
+    def update_transaction(
+        self,
+        transaction_id: int,
+        amount: float,
+        category: str,
+        description: str,
+        occurred_on: date,
+    ) -> bool:
+        cleaned_category = category.strip()
+        cleaned_description = description.strip()
+        if amount <= 0 or not cleaned_category or not cleaned_description:
+            return False
+
+        with self._connection() as connection:
+            kind_row = connection.execute(
+                "SELECT kind FROM transactions WHERE id = ?",
+                (int(transaction_id),),
+            ).fetchone()
+            if not kind_row:
+                return False
+
+            kind = str(kind_row["kind"]).strip() or "expense"
+            self.ensure_category(cleaned_category, kind)
+
+            cursor = connection.execute(
+                """
+                UPDATE transactions
+                SET amount = ?, category = ?, description = ?, occurred_on = ?
+                WHERE id = ?
+                """,
+                (
+                    float(amount),
+                    cleaned_category,
+                    cleaned_description,
+                    occurred_on.isoformat(),
+                    int(transaction_id),
+                ),
+            )
+            return cursor.rowcount > 0
+
     def _month_bounds(self, year: int, month: int) -> tuple[date, date]:
         start_on = date(year, month, 1)
         end_day = monthrange(year, month)[1]
