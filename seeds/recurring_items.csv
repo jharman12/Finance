@@ -1,9 +1,0 @@
-kind,amount,category,description,interval_count,interval_unit,start_on,next_run_on,last_run_on,is_active
-income,5000.00,Salary,Monthly salary,1,months,2026-01-01,2026-07-01,2026-06-01,1
-expense,1500.00,Mortgage,Mortgage payment,1,months,2026-01-01,2026-07-01,2026-06-01,1
-expense,150.00,Car Insurance,Car insurance premium,1,months,2026-01-01,2026-07-01,2026-06-01,1
-expense,85.00,Internet,Internet bill,1,months,2026-01-01,2026-07-01,2026-06-01,1
-expense,65.00,Phone,Phone plan,1,months,2026-01-01,2026-07-01,2026-06-01,1
-expense,75.00,Health,Gym membership,1,months,2026-01-01,2026-07-01,2026-06-01,1
-expense,25.00,Subscriptions,Netflix,1,months,2026-01-01,2026-07-01,2026-06-01,1
-expense,15.00,Subscriptions,Spotify,1,months,2026-01-01,2026-07-01,2026-06-01,1
