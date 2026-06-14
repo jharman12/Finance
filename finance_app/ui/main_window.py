@@ -142,6 +142,15 @@ class MainWindow(QMainWindow):
         self._build_recurring_tab()
         self._build_budget_tab()
         self._build_assistant_tab()
+        
+        # Load saved model preference
+        saved_model = self.repository.get_setting("selected_model")
+        if saved_model:
+            self.assistant_service.client.set_model(saved_model)
+            available_models = self.assistant_service.client.list_available_models()
+            if saved_model in available_models:
+                self.model_selector.setCurrentText(saved_model)
+        
         self._apply_styles()
         
         # Sync all recurring items with their transactions to fix any category mismatches
@@ -571,6 +580,7 @@ class MainWindow(QMainWindow):
         self.budget_table.horizontalHeader().setStretchLastSection(True)
         self.budget_table.setMinimumHeight(420)
         self.budget_table.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.budget_table.itemChanged.connect(self._handle_budget_table_item_changed)
         budget_layout.addWidget(self.budget_table)
 
         # Controls
@@ -685,6 +695,7 @@ class MainWindow(QMainWindow):
         self._set_metric_value(self.budget_remaining_to_spend, max(0, remaining_to_spend))
 
         # Populate budget table
+        self._is_refreshing_budget_table = True
         self.budget_table.setRowCount(len(budgets))
         for row_index, budget in enumerate(budgets):
             remaining = budget.remaining
@@ -709,14 +720,63 @@ class MainWindow(QMainWindow):
             for column_index, text in enumerate(cells):
                 item = QTableWidgetItem(text)
                 item.setData(Qt.UserRole, budget.id)
+                item.setFlags(Qt.ItemIsSelectable | Qt.ItemIsEnabled)
+                if column_index == 1:
+                    item.setFlags(item.flags() | Qt.ItemIsEditable)
                 if column_index > 0:  # Align numbers to right
                     item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
                 if column_index in [1, 2, 3, 4]:  # Color number columns
                     item.setBackground(QColor(color))
                 self.budget_table.setItem(row_index, column_index, item)
+        self._is_refreshing_budget_table = False
 
         # Update category dropdown for new entries
         self._refresh_budget_category_dropdown(selected_month, selected_year)
+
+    def _handle_budget_table_item_changed(self, item: QTableWidgetItem) -> None:
+        """Persist inline budget amount edits and refresh dependent insights."""
+        if getattr(self, "_is_refreshing_budget_table", False):
+            return
+
+        # Only the Budgeted column is editable.
+        if item.column() != 1:
+            return
+
+        row = item.row()
+        category_item = self.budget_table.item(row, 0)
+        notes_item = self.budget_table.item(row, 5)
+        if not category_item:
+            return
+
+        raw_text = item.text().strip().replace("$", "").replace(",", "")
+        try:
+            amount = float(raw_text)
+        except ValueError:
+            QMessageBox.warning(self, APP_NAME, "Please enter a valid numeric amount.")
+            self.refresh_budget()
+            return
+
+        if amount <= 0:
+            QMessageBox.warning(self, APP_NAME, "Budget amount must be greater than zero.")
+            self.refresh_budget()
+            return
+
+        selected_month = int(self.budget_month_toggle.currentData())
+        selected_year = int(self.budget_year_toggle.currentData())
+        category = category_item.text().strip()
+        notes = notes_item.text().strip() if notes_item else ""
+
+        self.repository.add_or_update_budget(
+            year=selected_year,
+            month=selected_month,
+            category=category,
+            kind="expense",
+            budgeted_amount=amount,
+            notes=notes,
+        )
+
+        self.status_bar.showMessage(f"Updated budget amount for {category}.", 2500)
+        self.refresh_budget()
 
     def _refresh_budget_category_dropdown(self, year: int, month: int) -> None:
         """Populate the category dropdown with unbudgeted expense categories."""
@@ -1051,6 +1111,20 @@ class MainWindow(QMainWindow):
         subtitle.setObjectName("PageSubtitle")
         layout.addWidget(title)
         layout.addWidget(subtitle)
+
+        # Model selector
+        model_selector_row = QHBoxLayout()
+        model_label = QLabel("Ollama Model:")
+        self.model_selector = QComboBox()
+        self.model_selector.currentTextChanged.connect(self._handle_model_changed)
+        self._refresh_available_models()
+        refresh_models_btn = QPushButton("↻ Refresh Models")
+        refresh_models_btn.setMaximumWidth(120)
+        refresh_models_btn.clicked.connect(self._refresh_available_models)
+        model_selector_row.addWidget(model_label)
+        model_selector_row.addWidget(self.model_selector, 1)
+        model_selector_row.addWidget(refresh_models_btn)
+        layout.addLayout(model_selector_row)
 
         self.chat_log = QTextEdit()
         self.chat_log.setReadOnly(True)
@@ -1786,6 +1860,36 @@ class MainWindow(QMainWindow):
             APP_NAME,
             f"Ollama is not responding yet:\n\n{error_text}\n\nStart Ollama and try again.",
         )
+
+    def _refresh_available_models(self) -> None:
+        """Fetch available models from Ollama and populate the dropdown."""
+        available_models = self.assistant_service.client.list_available_models()
+        current_model = self.assistant_service.client.model
+        
+        self.model_selector.blockSignals(True)
+        self.model_selector.clear()
+        
+        if available_models:
+            self.model_selector.addItems(available_models)
+            if current_model in available_models:
+                self.model_selector.setCurrentText(current_model)
+            else:
+                self.model_selector.setCurrentIndex(0)
+        else:
+            self.model_selector.addItem("(No models found)")
+            self.model_selector.setEnabled(False)
+        
+        self.model_selector.blockSignals(False)
+        self.status_bar.showMessage(f"Found {len(available_models)} model(s).", 3000)
+
+    def _handle_model_changed(self, model_name: str) -> None:
+        """Handle model selection change."""
+        if not model_name or model_name == "(No models found)":
+            return
+        
+        self.assistant_service.client.set_model(model_name)
+        self.repository.set_setting("selected_model", model_name)
+        self.status_bar.showMessage(f"Switched to model: {model_name}", 3000)
 
     def _handle_assistant_result(self, result: AssistantResult) -> None:
         response_lines = [f"<b>Assistant:</b> {result.reply}"]

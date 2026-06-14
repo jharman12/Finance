@@ -81,6 +81,18 @@ class AssistantService:
             if repaired_payload is not None:
                 raw_response = repaired_raw
                 payload = repaired_payload
+        
+        # Check if response appears incomplete (for analysis questions) and retry if needed
+        reply_text = str(payload.get("reply", "")).strip()
+        if self._is_analysis_question(prompt_text) and self._is_response_incomplete(reply_text):
+            completion_result = self._retry_for_completion(
+                messages=messages,
+                original_response=raw_response,
+                partial_reply=reply_text,
+            )
+            if completion_result is not None:
+                raw_response, payload = completion_result
+        
         result = AssistantResult(
             reply=str(payload.get("reply", "")) or raw_response,
             actions=list(payload.get("actions", [])) if isinstance(payload.get("actions", []), list) else [],
@@ -143,6 +155,117 @@ class AssistantService:
             "remove",
         )
         return any(keyword in text for keyword in mutation_keywords)
+
+    def _is_analysis_question(self, prompt_text: str) -> bool:
+        """Check if this is an analysis/advice question (not a mutation)."""
+        if self._is_mutation_request(prompt_text):
+            return False
+        text = (prompt_text or "").lower()
+        analysis_keywords = (
+            "how ",
+            "what ",
+            "should ",
+            "analyze",
+            "summary",
+            "trend",
+            "advice",
+            "recommend",
+            "budget",
+            "spending",
+            "overspend",
+            "savings",
+            "looking",
+            "health",
+            "pattern",
+        )
+        return any(keyword in text for keyword in analysis_keywords)
+
+    def _is_response_incomplete(self, reply_text: str) -> bool:
+        """Detect if a response appears to be cut off or incomplete."""
+        if not reply_text:
+            return True
+        
+        reply_lower = reply_text.lower().strip()
+        lines = reply_text.strip().split('\n')
+        last_line = lines[-1].strip() if lines else ""
+        
+        # Look for signs of incompleteness - setup text without actual content
+        setup_indicators = (
+            "let me",
+            "here is a detailed",
+            "here are",
+            "based on",
+            "looking at",
+            "according to",
+            "i've analyzed",
+            "i can see",
+            "let me provide",
+            "let me analyze",
+            "to give you",
+            "to provide you",
+        )
+        
+        # If response starts with setup/intro text
+        if any(indicator in reply_lower[:80] for indicator in setup_indicators):
+            # More precise check: need numbered list or specific dollar actions
+            has_numbered_actions = any(marker in reply_text for marker in ["1)", "2)", "3)"])
+            has_dollar_actions = ("$" in reply_text and any(
+                word in reply_lower for word in ["reduce", "cut", "increase", "save", "to"]
+            ))
+            has_concrete_content = has_numbered_actions or has_dollar_actions
+            
+            # If it's pure setup without concrete numbered recommendations or money-specific actions
+            if not has_concrete_content:
+                return True
+            
+            # If it has some action content but is still quite short (maybe just one brief recommendation)
+            if len(reply_text) < 200:
+                return True
+        
+        # Check if it ends mid-sentence (no punctuation)
+        if last_line and not any(last_line.endswith(p) for p in ['.', '!', '?', '"', "'"]):
+            if len(last_line) > 20:
+                return True
+        
+        return False
+
+    def _retry_for_completion(
+        self,
+        messages: list[OllamaMessage],
+        original_response: str,
+        partial_reply: str,
+    ) -> tuple[str, dict[str, Any]] | None:
+        """Retry to complete an incomplete response."""
+        continuation_prompt = (
+            "Your previous response appears incomplete or cut off. "
+            "Please provide the COMPLETE analysis and recommendations, continuing from where you left off or starting fresh. "
+            "Include:\n"
+            "1. Full financial health assessment\n"
+            "2. Specific spending concerns with amounts\n"
+            "3. Comparison to healthy spending benchmarks\n"
+            "4. At least 3-5 specific, actionable recommendations\n"
+            "5. Prioritized by impact and ease of implementation\n"
+            "\n"
+            "Return as strictly valid JSON: {\"reply\": \"complete analysis here\", \"actions\": []}\n"
+            "Ensure the reply field contains the complete, untruncated analysis."
+        )
+        
+        completion_messages = list(messages)
+        completion_messages.append(OllamaMessage(role="assistant", content=original_response))
+        completion_messages.append(OllamaMessage(role="user", content=continuation_prompt))
+        
+        try:
+            completion_raw = self.client.chat(completion_messages, json_mode=True)
+            completion_payload = self._parse_payload(completion_raw)
+            
+            # Only return if we got a better response
+            completion_reply = str(completion_payload.get("reply", "")).strip()
+            if len(completion_reply) > len(partial_reply):
+                return completion_raw, completion_payload
+        except Exception:
+            pass
+        
+        return None
 
     def _retry_with_action_enforcement(
         self,

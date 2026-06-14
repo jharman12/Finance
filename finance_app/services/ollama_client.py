@@ -22,7 +22,7 @@ class OllamaClient:
         base_url: str = OLLAMA_BASE_URL,
         model: str = DEFAULT_MODEL,
         startup_command: tuple[str, ...] = OLLAMA_START_COMMAND,
-        timeout_seconds: int = 120,
+        timeout_seconds: int = 300,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.model = model
@@ -54,6 +54,12 @@ class OllamaClient:
             if name:
                 available_models.append(name)
         return available_models
+
+    def set_model(self, model_name: str) -> None:
+        """Change the active model."""
+        cleaned_name = model_name.strip()
+        if cleaned_name:
+            self.model = cleaned_name
 
     def ensure_model_available(self) -> None:
         self.ensure_running()
@@ -113,6 +119,9 @@ class OllamaClient:
             "model": self.model,
             "messages": [asdict(message) for message in messages],
             "stream": False,
+            "options": {
+                "num_predict": 2000,  # Allow longer responses for detailed analysis
+            }
         }
         if json_mode:
             payload["format"] = "json"
@@ -140,6 +149,9 @@ class OllamaClient:
             "model": self.model,
             "prompt": self._messages_to_prompt(messages),
             "stream": False,
+            "options": {
+                "num_predict": 2000,  # Allow longer responses for detailed analysis
+            }
         }
         if json_mode:
             payload["format"] = "json"

@@ -76,6 +76,11 @@ class FinanceRepository:
                     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     UNIQUE(year, month, category, kind)
                 );
+
+                CREATE TABLE IF NOT EXISTS settings (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                );
                 """
             )
 
@@ -265,6 +270,27 @@ class FinanceRepository:
             "total_synced": total_synced,
             "recurring_items_processed": len(recurring_items),
         }
+
+    def get_setting(self, key: str, default: str | None = None) -> str | None:
+        """Get a setting value. Returns None if key does not exist (or default if provided)."""
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT value FROM settings WHERE key = ?",
+                (key,),
+            ).fetchone()
+        return row["value"] if row else default
+
+    def set_setting(self, key: str, value: str) -> None:
+        """Set a setting value. Creates or updates as needed."""
+        cleaned_key = key.strip()
+        if not cleaned_key:
+            return
+
+        with self._connection() as connection:
+            connection.execute(
+                "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+                (cleaned_key, value),
+            )
 
     def add_transaction(
         self,
