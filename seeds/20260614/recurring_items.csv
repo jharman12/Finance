@@ -1,0 +1,13 @@
+kind,amount,category,description,interval_count,interval_unit,start_on,next_run_on,last_run_on,is_active
+income,3073.0,Salary,Salary,1,months,2026-06-10,2026-07-10,2026-06-10,1
+income,3076.0,Salary,Salary,1,months,2026-06-20,2026-06-20,,1
+expense,2832.92,Mortgage,Mortgage,1,months,2026-06-01,2026-07-01,2026-06-01,1
+expense,278.39,Car Insurance,Car Insurance,1,months,2026-06-07,2026-07-07,2026-06-07,1
+expense,26.67,Transport,Jacks Phone,1,months,2026-06-01,2026-07-01,2026-06-01,1
+expense,656.48,Tesla Payment,Tesla Payment,1,months,2026-06-08,2026-07-08,2026-06-08,1
+expense,10.0,Entertainment,Crunchy Roll,1,months,2026-06-08,2026-07-08,2026-06-08,1
+expense,18.0,Entertainment,Netflix,1,months,2026-06-08,2026-07-08,2026-06-08,1
+expense,17.0,Entertainment,Disney+,1,months,2026-06-08,2026-07-08,2026-06-08,1
+expense,15.0,Entertainment,Audible,1,months,2026-06-08,2026-07-08,2026-06-08,1
+expense,181.21,Student Loans,Student Loans,1,months,2026-06-08,2026-07-08,2026-06-08,1
+expense,322.19,Groceries,Butcher Box,1,months,2026-06-24,2026-07-13,2026-06-13,1

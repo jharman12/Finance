@@ -13,3 +13,8 @@ dist/
 *.sqlite
 *.sqlite3
 .DS_Store
+
+# Ensure seeds/ CSVs are always tracked even in repos that glob-exclude data files
+!seeds/
+!seeds/*.csv
+!seeds/*.md

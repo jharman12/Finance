@@ -1,0 +1,14 @@
+year,month,category,kind,budgeted_amount,notes
+2026,6,Car Insurance,expense,278.39,Recurring item (auto-allocated)
+2026,6,Dining,expense,31.46,AI-suggested allocation
+2026,6,Entertainment,expense,15.0,Recurring item (auto-allocated)
+2026,6,Groceries,expense,800.0,Recurring item (auto-allocated)
+2026,6,Health,expense,82.0,AI-suggested allocation
+2026,6,Investments,expense,600.0,
+2026,6,Jacks Phone,expense,26.67,Recurring item (auto-allocated)
+2026,6,Mortgage,expense,2832.92,Recurring item (auto-allocated)
+2026,6,Other,expense,322.19,Recurring item (auto-allocated)
+2026,6,Student Loans,expense,181.21,Recurring item (auto-allocated)
+2026,6,Tesla Payment,expense,656.48,Recurring item (auto-allocated)
+2026,6,Transport,expense,26.67,Recurring item (auto-allocated)
+2026,6,Utilities,expense,98.03,AI-suggested allocation

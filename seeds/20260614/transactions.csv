@@ -1,0 +1,13 @@
+kind,amount,category,description,occurred_on
+expense,2832.92,Mortgage,Mortgage,2026-06-01
+expense,26.67,Transport,Jacks Phone,2026-06-01
+expense,278.39,Car Insurance,Car Insurance,2026-06-07
+expense,656.48,Tesla Payment,Tesla Payment,2026-06-08
+expense,10.0,Entertainment,Crunchy Roll,2026-06-08
+expense,18.0,Entertainment,Netflix,2026-06-08
+expense,17.0,Entertainment,Disney+,2026-06-08
+expense,15.0,Entertainment,Audible,2026-06-08
+expense,181.21,Student Loans,Student Loans,2026-06-08
+income,3073.0,Salary,Salary,2026-06-10
+expense,322.19,Groceries,Butcher Box,2026-06-14
+income,3073.0,Salary,Salary,2026-07-09
