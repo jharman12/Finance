@@ -124,7 +124,9 @@ class MainWindow(QMainWindow):
         self.assistant_service = AssistantService(self.repository)
         self.voice_coordinator = VoiceCoordinator(wake_phrase="hey steven")
         self._ui_scale = self._load_ui_scale_setting()
+        self._density_mode = self._load_ui_density_setting()
         self._layout_base_metrics: dict[int, tuple[tuple[int, int, int, int], int]] = {}
+        self._density_actions: dict[str, QAction] = {}
         self.voice_enabled = False
         self._assistant_worker: AssistantWorker | None = None
         self._ollama_warmup_worker: OllamaWarmupWorker | None = None
@@ -139,6 +141,8 @@ class MainWindow(QMainWindow):
 
         self.tabs = QTabWidget()
         self.setCentralWidget(self.tabs)
+        self.tabs.setDocumentMode(True)
+        self.tabs.setUsesScrollButtons(True)
 
         self.dashboard_tab = QWidget()
         self.charts_tab = QWidget()
@@ -667,7 +671,7 @@ class MainWindow(QMainWindow):
         self.budget_table.setSelectionMode(QAbstractItemView.SingleSelection)
         self.budget_table.setAlternatingRowColors(True)
         self.budget_table.horizontalHeader().setStretchLastSection(True)
-        self.budget_table.setMinimumHeight(320)
+        self.budget_table.setMinimumHeight(760)
         self.budget_table.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.budget_table.itemChanged.connect(self._handle_budget_table_item_changed)
         self.budget_table.cellDoubleClicked.connect(self._handle_budget_table_cell_double_clicked)
@@ -700,6 +704,7 @@ class MainWindow(QMainWindow):
         button_row.setColumnStretch(1, 1)
         button_row.setColumnStretch(2, 1)
         budget_layout.addLayout(button_row)
+        budget_layout.setStretch(1, 1)
 
         layout.addWidget(budget_panel, 1)
 
@@ -2848,6 +2853,30 @@ class MainWindow(QMainWindow):
         import_action.triggered.connect(self._handle_import_csv)
         file_menu.addAction(import_action)
 
+        view_menu = menu_bar.addMenu("View")
+
+        reset_zoom_action = QAction("Reset Zoom", self)
+        reset_zoom_action.setStatusTip("Reset UI zoom to 100%")
+        reset_zoom_action.triggered.connect(self._reset_ui_scale)
+        view_menu.addAction(reset_zoom_action)
+
+        density_menu = view_menu.addMenu("Density")
+        density_options = [
+            ("compact", "Compact"),
+            ("comfortable", "Comfortable"),
+            ("spacious", "Spacious"),
+        ]
+        for density_value, density_label in density_options:
+            action = QAction(density_label, self)
+            action.setCheckable(True)
+            action.triggered.connect(
+                lambda checked, mode=density_value: self._set_density_mode(mode) if checked else None
+            )
+            density_menu.addAction(action)
+            self._density_actions[density_value] = action
+
+        self._refresh_density_actions()
+
     def _handle_export_csv(self) -> None:
         directory = QFileDialog.getExistingDirectory(
             self,
@@ -2910,6 +2939,10 @@ class MainWindow(QMainWindow):
         except ValueError:
             return 1.0
         return self._clamp_ui_scale(parsed)
+
+    def _load_ui_density_setting(self) -> str:
+        saved_mode = (self.repository.get_setting("ui_density", "comfortable") or "comfortable").strip().lower()
+        return saved_mode if saved_mode in {"compact", "comfortable", "spacious"} else "comfortable"
 
     def _clamp_ui_scale(self, value: float) -> float:
         return max(0.85, min(1.50, value))
@@ -2992,8 +3025,37 @@ class MainWindow(QMainWindow):
                     if child_widget is not None and child_widget.layout() is not None:
                         stack.append(child_widget.layout())
 
+    def _density_scale(self) -> float:
+        return {
+            "compact": 0.88,
+            "comfortable": 1.0,
+            "spacious": 1.14,
+        }.get(self._density_mode, 1.0)
+
+    def _set_density_mode(self, mode: str, persist: bool = True, show_status: bool = True) -> None:
+        normalized = mode.strip().lower()
+        if normalized not in {"compact", "comfortable", "spacious"}:
+            return
+        if normalized == self._density_mode:
+            self._refresh_density_actions()
+            return
+
+        self._density_mode = normalized
+        self._apply_ui_scale(persist=False, show_status=False)
+        if persist:
+            self.repository.set_setting("ui_density", self._density_mode)
+        self._refresh_density_actions()
+        if show_status:
+            self.status_bar.showMessage(f"Density: {self._density_mode.title()}", 2500)
+
+    def _refresh_density_actions(self) -> None:
+        for mode, action in self._density_actions.items():
+            action.blockSignals(True)
+            action.setChecked(mode == self._density_mode)
+            action.blockSignals(False)
+
     def _apply_layout_scale(self) -> None:
-        scale = self._ui_scale
+        scale = self._ui_scale * self._density_scale()
         seen_layout_ids: set[int] = set()
         for widget in self.findChildren(QWidget):
             layout = widget.layout()
@@ -3036,22 +3098,24 @@ class MainWindow(QMainWindow):
 
     def _apply_styles(self) -> None:
         scale = self._ui_scale
+        density_scale = self._density_scale()
+        spatial_scale = scale * density_scale
         font_size = max(9, int(round(10 * scale)))
         page_title_size = max(20, int(round(26 * scale)))
         subtitle_size = max(10, int(round(11 * scale)))
         section_title_size = max(12, int(round(15 * scale)))
         metric_value_size = max(16, int(round(22 * scale)))
-        radius_large = max(10, int(round(18 * scale)))
-        radius_medium = max(8, int(round(12 * scale)))
-        tab_padding_y = max(8, int(round(12 * scale)))
-        tab_padding_x = max(12, int(round(18 * scale)))
-        control_padding = max(7, int(round(10 * scale)))
-        button_padding_y = max(8, int(round(12 * scale)))
-        button_padding_x = max(12, int(round(16 * scale)))
-        header_padding = max(7, int(round(10 * scale)))
-        scroll_handle_size = max(18, int(round(24 * scale)))
-        tab_radius = max(8, int(round(10 * scale)))
-        scroll_radius = max(4, int(round(6 * scale)))
+        radius_large = max(10, int(round(18 * spatial_scale)))
+        radius_medium = max(8, int(round(12 * spatial_scale)))
+        tab_padding_y = max(8, int(round(12 * spatial_scale)))
+        tab_padding_x = max(12, int(round(18 * spatial_scale)))
+        control_padding = max(7, int(round(10 * spatial_scale)))
+        button_padding_y = max(8, int(round(12 * spatial_scale)))
+        button_padding_x = max(12, int(round(16 * spatial_scale)))
+        header_padding = max(7, int(round(10 * spatial_scale)))
+        scroll_handle_size = max(18, int(round(24 * spatial_scale)))
+        tab_radius = max(8, int(round(10 * spatial_scale)))
+        scroll_radius = max(4, int(round(6 * spatial_scale)))
 
         theme = {
             "bg_app": "#0a1018",
@@ -3074,10 +3138,12 @@ class MainWindow(QMainWindow):
             "accent": "#2ec4b6",
             "accent_hover": "#58d4c8",
             "accent_pressed": "#25a99e",
+            "accent_soft": "#163239",
             "success": "#8de59b",
             "warning": "#ffd166",
             "danger": "#ff8f8f",
             "warning_secondary": "#ffb347",
+            "focus_ring": "#71e6db",
         }
 
         font = QFont("Segoe UI")
@@ -3135,18 +3201,29 @@ class MainWindow(QMainWindow):
             QTabWidget::pane {
                 border: 0;
                 background: %(bg_app)s;
+                margin-top: 8px;
             }
             QTabBar::tab {
                 background: %(bg_tab)s;
                 color: %(text_secondary)s;
                 padding: %(tab_padding_y)dpx %(tab_padding_x)dpx;
                 margin-right: 6px;
+                margin-top: 4px;
+                border: 1px solid %(border)s;
+                border-bottom: 3px solid transparent;
                 border-top-left-radius: %(tab_radius)dpx;
                 border-top-right-radius: %(tab_radius)dpx;
+            }
+            QTabBar::tab:hover {
+                background: %(bg_tab_selected)s;
+                color: %(text_heading)s;
             }
             QTabBar::tab:selected {
                 background: %(bg_tab_selected)s;
                 color: %(text_heading)s;
+                border-color: %(border_strong)s;
+                border-bottom: 3px solid %(accent)s;
+                margin-top: 0;
             }
             QLabel#PageTitle {
                 font-size: %(page_title_size)dpt;
@@ -3200,6 +3277,10 @@ class MainWindow(QMainWindow):
                 padding: %(control_padding)dpx;
                 selection-background-color: %(accent)s;
             }
+            QLineEdit:focus, QDoubleSpinBox:focus, QDateEdit:focus, QComboBox:focus, QTextEdit:focus, QTableWidget:focus {
+                border: 1px solid %(focus_ring)s;
+                background: %(bg_surface)s;
+            }
             QLineEdit:disabled, QDoubleSpinBox:disabled, QDateEdit:disabled, QComboBox:disabled, QTextEdit:disabled {
                 color: %(text_disabled)s;
                 background: %(bg_surface_disabled)s;
@@ -3238,6 +3319,10 @@ class MainWindow(QMainWindow):
             QPushButton:pressed {
                 background: %(accent_pressed)s;
             }
+            QPushButton:focus {
+                border: 1px solid %(focus_ring)s;
+                background: %(accent_hover)s;
+            }
             QHeaderView::section {
                 background: %(bg_header)s;
                 color: %(text_secondary)s;
@@ -3246,6 +3331,13 @@ class MainWindow(QMainWindow):
             }
             QTableWidget {
                 gridline-color: %(border_grid)s;
+            }
+            QTableWidget::item {
+                padding: 6px;
+            }
+            QTableWidget::item:selected {
+                background: %(accent_soft)s;
+                color: %(text_heading)s;
             }
             QScrollBar:vertical, QScrollBar:horizontal {
                 background: %(bg_app)s;
@@ -3265,6 +3357,15 @@ class MainWindow(QMainWindow):
             QStatusBar {
                 background: %(bg_surface_strong)s;
                 color: %(text_secondary)s;
+            }
+            QMenuBar::item {
+                background: transparent;
+                padding: 6px 10px;
+                border-radius: %(radius_medium)dpx;
+            }
+            QMenuBar::item:selected {
+                background: %(bg_tab_selected)s;
+                color: %(text_heading)s;
             }
             QMessageBox {
                 background: %(bg_app)s;
