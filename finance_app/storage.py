@@ -1196,6 +1196,14 @@ class FinanceRepository:
     def monthly_history(self, reference_year: int, reference_month: int, months: int = 6) -> list[tuple[int, int, float, float, float]]:
         return self._analytics_repository.monthly_history(reference_year, reference_month, months)
 
+    def personal_position_history(
+        self,
+        reference_year: int,
+        reference_month: int,
+        months: int = 12,
+    ) -> list[tuple[int, int, float, float, float]]:
+        return self._analytics_repository.personal_position_history(reference_year, reference_month, months)
+
     def compute_income_series(self, reference_year: int, reference_month: int, months: int = 6) -> list[float]:
         return self._analytics_repository.compute_income_series(reference_year, reference_month, months)
 

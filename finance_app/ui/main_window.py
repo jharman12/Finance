@@ -46,6 +46,7 @@ from PyQt5.QtWidgets import (
 )
 
 from finance_app.config import APP_NAME
+from finance_app.chart_models import CashflowChartsPayload, PositionChartsPayload
 from finance_app.models import Asset, AssistantResult, Transaction
 from finance_app.services.assistant_service import AssistantService
 from finance_app.services.voice_pipeline import VoiceCoordinator
@@ -257,9 +258,11 @@ class MainWindow(QMainWindow):
     def _build_charts_tab(self) -> None:
         layout = self._build_scrollable_tab_layout(self.charts_tab)
 
-        title = QLabel("Monthly Charts")
+        title = QLabel("Personal Finance Charts")
         title.setObjectName("PageTitle")
-        subtitle = QLabel("Visualize cash flow, category mix, and recent monthly trends for the selected period.")
+        subtitle = QLabel(
+            "Analyze cash flow, net worth, debt, and personal financial position for the selected period."
+        )
         subtitle.setObjectName("PageSubtitle")
         layout.addWidget(title)
         layout.addWidget(subtitle)
@@ -273,6 +276,13 @@ class MainWindow(QMainWindow):
         self.charts_year_toggle.currentIndexChanged.connect(self._handle_chart_period_changed)
         period_row.addWidget(self.charts_month_toggle)
         period_row.addWidget(self.charts_year_toggle)
+        period_row.addWidget(QLabel("View"))
+        self.charts_view_selector = QComboBox()
+        self.charts_view_selector.addItem("Cash Flow", "cashflow")
+        self.charts_view_selector.addItem("Personal Position", "position")
+        self.charts_view_selector.setCurrentIndex(1)
+        self.charts_view_selector.currentIndexChanged.connect(self.refresh_charts)
+        period_row.addWidget(self.charts_view_selector)
         period_row.addStretch(1)
         layout.addLayout(period_row)
 
@@ -3532,10 +3542,25 @@ class MainWindow(QMainWindow):
                 self.recurring_table.setItem(row_index, column_index, widget_item)
 
     def refresh_charts(self) -> None:
-        daily_totals = self.analytics_controller.daily_totals_for_month(self._selected_year, self._selected_month)
-        expense_breakdown = self.analytics_controller.expense_breakdown_for_month(self._selected_year, self._selected_month)
-        monthly_history = self.analytics_controller.monthly_history(self._selected_year, self._selected_month, months=6)
-        snapshot = self.analytics_controller.snapshot_for_month(self._selected_year, self._selected_month)
+        selected_view = str(self.charts_view_selector.currentData() or "cashflow")
+        if selected_view == "position":
+            payload = self.analytics_controller.get_position_charts_payload(
+                self._selected_year,
+                self._selected_month,
+                months_history=12,
+            )
+            self._render_position_charts(payload)
+            return
+
+        payload = self.analytics_controller.get_cashflow_charts_payload(
+            self._selected_year,
+            self._selected_month,
+            months_history=6,
+        )
+        self._render_cashflow_charts(payload)
+
+    def _render_cashflow_charts(self, payload: CashflowChartsPayload) -> None:
+        snapshot = payload.snapshot
 
         self.charts_summary.setText(
             f"{calendar.month_name[self._selected_month]} {self._selected_year}: "
@@ -3547,18 +3572,21 @@ class MainWindow(QMainWindow):
         axes = self.analytics_figure.subplots(2, 2)
         self.analytics_figure.patch.set_facecolor("#111a27")
 
-        day_numbers = [entry[0].day for entry in daily_totals]
-        income_values = [entry[1] for entry in daily_totals]
-        expense_values = [entry[2] for entry in daily_totals]
-        net_values = [entry[3] for entry in daily_totals]
+        day_numbers = [point.occurred_on.day for point in payload.daily_points]
+        income_values = [point.income for point in payload.daily_points]
+        expense_values = [point.expense for point in payload.daily_points]
+        net_values = [point.net for point in payload.daily_points]
 
-        history_labels = [f"{calendar.month_abbr[month]} {str(year)[-2:]}" for year, month, *_ in monthly_history]
-        history_income = [entry[2] for entry in monthly_history]
-        history_expense = [entry[3] for entry in monthly_history]
-        history_net = [entry[4] for entry in monthly_history]
+        history_labels = [
+            f"{calendar.month_abbr[point.month]} {str(point.year)[-2:]}"
+            for point in payload.monthly_points
+        ]
+        history_income = [point.income for point in payload.monthly_points]
+        history_expense = [point.expense for point in payload.monthly_points]
+        history_net = [point.net for point in payload.monthly_points]
 
-        category_labels = [label for label, _ in expense_breakdown[:8]]
-        category_values = [value for _, value in expense_breakdown[:8]]
+        category_labels = [point.category for point in payload.expense_breakdown[:8]]
+        category_values = [point.amount for point in payload.expense_breakdown[:8]]
 
         ax_daily, ax_history, ax_categories, ax_share = axes[0][0], axes[0][1], axes[1][0], axes[1][1]
         for axis in (ax_daily, ax_history, ax_categories, ax_share):
@@ -3601,6 +3629,81 @@ class MainWindow(QMainWindow):
         else:
             ax_share.text(0.5, 0.5, "No category mix yet.", color="#e7edf7", ha="center", va="center")
             ax_share.set_title("Expense Share", color="#f5f8ff")
+
+        self.analytics_figure.tight_layout()
+        self.analytics_canvas.draw_idle()
+
+    def _render_position_charts(self, payload: PositionChartsPayload) -> None:
+        debt_labels = ", ".join(point.label for point in payload.debt_composition[:3])
+        debt_context = f" | Debt Drivers {debt_labels}" if debt_labels else ""
+        self.charts_summary.setText(
+            f"{calendar.month_name[self._selected_month]} {self._selected_year}: "
+            f"Net Worth ${payload.total_net_worth:,.2f} | Debt ${payload.total_debt:,.2f} | "
+            f"Assets ${payload.total_asset_value:,.2f} | Tracked Assets {len(payload.assets)}{debt_context}"
+        )
+
+        self.analytics_figure.clear()
+        axes = self.analytics_figure.subplots(2, 2)
+        self.analytics_figure.patch.set_facecolor("#111a27")
+
+        ax_net_worth, ax_debt, ax_savings, ax_allocation = axes[0][0], axes[0][1], axes[1][0], axes[1][1]
+        for axis in (ax_net_worth, ax_debt, ax_savings, ax_allocation):
+            self._style_chart_axis(axis)
+
+        if payload.monthly_points:
+            labels = [f"{calendar.month_abbr[p.month]} {str(p.year)[-2:]}" for p in payload.monthly_points]
+            net_worth_series = [p.estimated_net_worth for p in payload.monthly_points]
+            debt_series = [p.estimated_total_debt for p in payload.monthly_points]
+            savings_rate_series = [p.savings_rate * 100.0 for p in payload.monthly_points]
+
+            ax_net_worth.plot(labels, net_worth_series, marker="o", color="#2ec4b6", linewidth=2.2)
+            ax_net_worth.set_title("Estimated Net Worth Trend", color="#f5f8ff")
+            ax_net_worth.tick_params(axis="x", rotation=20)
+            ax_net_worth.set_ylabel("Amount")
+
+            ax_debt.plot(labels, debt_series, marker="o", color="#ff7b72", linewidth=2.2)
+            ax_debt.set_title("Estimated Total Debt Trend", color="#f5f8ff")
+            ax_debt.tick_params(axis="x", rotation=20)
+            ax_debt.set_ylabel("Amount")
+
+            ax_savings.plot(labels, savings_rate_series, marker="o", color="#4cc9f0", linewidth=2.2)
+            ax_savings.axhline(20.0, color="#f2c14e", linestyle="--", linewidth=1.4, label="20% target")
+            ax_savings.set_title("Savings Rate Trend", color="#f5f8ff")
+            ax_savings.tick_params(axis="x", rotation=20)
+            ax_savings.set_ylabel("Percent")
+            ax_savings.legend(facecolor="#111a27", edgecolor="#233247", labelcolor="#e7edf7")
+        else:
+            ax_net_worth.text(0.5, 0.5, "No monthly position history yet.", color="#e7edf7", ha="center", va="center")
+            ax_net_worth.set_title("Estimated Net Worth Trend", color="#f5f8ff")
+            ax_debt.text(0.5, 0.5, "No monthly debt history yet.", color="#e7edf7", ha="center", va="center")
+            ax_debt.set_title("Estimated Total Debt Trend", color="#f5f8ff")
+            ax_savings.text(0.5, 0.5, "No savings-rate history yet.", color="#e7edf7", ha="center", va="center")
+            ax_savings.set_title("Savings Rate Trend", color="#f5f8ff")
+
+        allocation_rows: list[tuple[str, float]] = []
+        for asset in payload.assets:
+            if asset.asset_type == "house":
+                value = float(asset.house_value)
+            else:
+                value = float(asset.investment_worth)
+            if value > 0:
+                allocation_rows.append((asset.name, value))
+
+        if allocation_rows:
+            labels = [name for name, _ in allocation_rows]
+            values = [amount for _, amount in allocation_rows]
+            pie_colors = ["#2ec4b6", "#4cc9f0", "#f2c14e", "#90be6d", "#43aa8b", "#577590", "#f9844a", "#ff7b72"]
+            ax_allocation.pie(
+                values,
+                labels=labels,
+                colors=pie_colors[: len(values)],
+                autopct="%1.0f%%",
+                textprops={"color": "#041012"},
+            )
+            ax_allocation.set_title("Asset Allocation", color="#f5f8ff")
+        else:
+            ax_allocation.text(0.5, 0.5, "No asset allocation data.", color="#e7edf7", ha="center", va="center")
+            ax_allocation.set_title("Asset Allocation", color="#f5f8ff")
 
         self.analytics_figure.tight_layout()
         self.analytics_canvas.draw_idle()

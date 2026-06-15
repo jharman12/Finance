@@ -34,6 +34,8 @@ class ArchitectureBoundaryTests(unittest.TestCase):
             "return self._analytics_repository.expense_breakdown_for_month(year, month)",
             "return self._analytics_repository.snapshot()",
             "return self._analytics_repository.snapshot_for_month(year, month)",
+            "return self._analytics_repository.monthly_history(reference_year, reference_month, months=months)",
+            "return self._analytics_repository.personal_position_history(reference_year, reference_month, months)",
         ]
 
         for snippet in expected_delegations:

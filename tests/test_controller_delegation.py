@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import date
 import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -68,6 +69,60 @@ class ControllerDelegationTests(unittest.TestCase):
 
         repository.snapshot_for_month.assert_called_once_with(2026, 6)
         self.assertIs(result, expected)
+
+    def test_analytics_controller_builds_cashflow_payload(self) -> None:
+        repository = Mock()
+        snapshot = SimpleNamespace(income_total=1000.0, expense_total=500.0, net_total=500.0, transaction_count=3)
+        repository.snapshot_for_month.return_value = snapshot
+        repository.daily_totals_for_month.return_value = [(date(2026, 6, 1), 100.0, 50.0, 50.0)]
+        repository.expense_breakdown_for_month.return_value = [("Groceries", 120.0)]
+        repository.monthly_history.return_value = [(2026, 6, 1000.0, 500.0, 500.0)]
+
+        controller = AnalyticsController(repository)
+
+        payload = controller.get_cashflow_charts_payload(2026, 6, months_history=6)
+
+        repository.snapshot_for_month.assert_called_once_with(2026, 6)
+        repository.daily_totals_for_month.assert_called_once_with(2026, 6)
+        repository.expense_breakdown_for_month.assert_called_once_with(2026, 6)
+        repository.monthly_history.assert_called_once_with(2026, 6, months=6)
+        self.assertEqual(payload.year, 2026)
+        self.assertEqual(payload.month, 6)
+        self.assertIs(payload.snapshot, snapshot)
+        self.assertEqual(payload.daily_points[0].occurred_on, date(2026, 6, 1))
+        self.assertEqual(payload.expense_breakdown[0].category, "Groceries")
+        self.assertEqual(payload.monthly_points[0].net, 500.0)
+
+    def test_analytics_controller_builds_position_payload(self) -> None:
+        repository = Mock()
+        repository.list_assets.return_value = [
+            SimpleNamespace(name="House", asset_type="house", current_principal=250000.0),
+            SimpleNamespace(name="Brokerage", asset_type="investment", current_principal=0.0),
+        ]
+        repository.personal_position_history.return_value = [
+            (2026, 5, 147800.0, 252000.0, 399800.0),
+            (2026, 6, 150000.0, 250000.0, 400000.0),
+        ]
+        repository.monthly_history.return_value = [
+            (2026, 5, 8000.0, 6000.0, 2000.0),
+            (2026, 6, 8100.0, 5900.0, 2200.0),
+        ]
+
+        controller = AnalyticsController(repository)
+
+        payload = controller.get_position_charts_payload(2026, 6, months_history=12)
+
+        repository.list_assets.assert_called_once_with()
+        repository.personal_position_history.assert_called_once_with(2026, 6, months=12)
+        repository.monthly_history.assert_called_once_with(2026, 6, months=12)
+        self.assertEqual(payload.total_net_worth, 150000.0)
+        self.assertEqual(payload.total_debt, 250000.0)
+        self.assertEqual(payload.total_asset_value, 400000.0)
+        self.assertEqual(len(payload.debt_composition), 1)
+        self.assertEqual(payload.debt_composition[0].label, "House")
+        self.assertEqual(len(payload.monthly_points), 2)
+        self.assertEqual(payload.monthly_points[0].estimated_net_worth, 147800.0)
+        self.assertEqual(payload.monthly_points[-1].savings_rate, 2200.0 / 8100.0)
 
     def test_app_controller_delegates_settings_and_materialization(self) -> None:
         repository = Mock()
