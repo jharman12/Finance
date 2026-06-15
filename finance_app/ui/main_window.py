@@ -95,6 +95,7 @@ class MetricCard(QFrame):
         self.title_label.setObjectName("MetricCardTitle")
         self.value_label = QLabel(value)
         self.value_label.setObjectName("MetricCardValue")
+        self.value_label.setProperty("tone", "default")
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(18, 16, 18, 16)
@@ -104,10 +105,11 @@ class MetricCard(QFrame):
 
     def set_value(self, value: str, is_warning: bool = False) -> None:
         self.value_label.setText(value)
-        if is_warning:
-            self.value_label.setStyleSheet("color: #ff6b6b; font-weight: bold;")
-        else:
-            self.value_label.setStyleSheet("")
+        tone = "warning" if is_warning else "default"
+        self.value_label.setProperty("tone", tone)
+        style = self.value_label.style()
+        style.unpolish(self.value_label)
+        style.polish(self.value_label)
 
 
 class MainWindow(QMainWindow):
@@ -633,6 +635,7 @@ class MainWindow(QMainWindow):
         self.savings_goal_input.valueChanged.connect(self._handle_savings_goal_changed)
         self.budget_goal_status_label = QLabel("Goal status: No goal set for this month.")
         self.budget_goal_status_label.setObjectName("PageSubtitle")
+        self.budget_goal_status_label.setProperty("tone", "muted")
 
         goal_layout.addWidget(goal_label)
         goal_layout.addWidget(self.savings_goal_input)
@@ -956,14 +959,14 @@ class MainWindow(QMainWindow):
 
         if savings_goal <= 0:
             self.budget_goal_status_label.setText("Goal status: No goal set for this month.")
-            self.budget_goal_status_label.setStyleSheet("color: #90a4bf;")
+            self._set_widget_tone(self.budget_goal_status_label, "muted")
             return
 
         if elapsed_days <= 0:
             self.budget_goal_status_label.setText(
                 f"Goal status: Month has not started. Target savings is ${savings_goal:,.2f}."
             )
-            self.budget_goal_status_label.setStyleSheet("color: #90a4bf;")
+            self._set_widget_tone(self.budget_goal_status_label, "muted")
             return
 
         target_to_date = savings_goal * (elapsed_days / days_in_month)
@@ -973,17 +976,17 @@ class MainWindow(QMainWindow):
             self.budget_goal_status_label.setText(
                 f"Goal status: On track by ${delta:,.2f} (saved ${actual_net:,.2f} vs ${target_to_date:,.2f} expected)."
             )
-            self.budget_goal_status_label.setStyleSheet("color: #8de59b;")
+            self._set_widget_tone(self.budget_goal_status_label, "success")
         elif delta >= -(savings_goal * 0.1):
             self.budget_goal_status_label.setText(
                 f"Goal status: Slightly behind by ${abs(delta):,.2f} (saved ${actual_net:,.2f} vs ${target_to_date:,.2f} expected)."
             )
-            self.budget_goal_status_label.setStyleSheet("color: #ffd166;")
+            self._set_widget_tone(self.budget_goal_status_label, "warning")
         else:
             self.budget_goal_status_label.setText(
                 f"Goal status: Behind by ${abs(delta):,.2f} (saved ${actual_net:,.2f} vs ${target_to_date:,.2f} expected)."
             )
-            self.budget_goal_status_label.setStyleSheet("color: #ff8f8f;")
+            self._set_widget_tone(self.budget_goal_status_label, "danger")
 
     def _export_budget_month_csv(self) -> None:
         """Export current month budget rows to a CSV file."""
@@ -1926,7 +1929,7 @@ class MainWindow(QMainWindow):
         house_layout.addWidget(self.house_tracking_hint)
         self.house_warning_label = QLabel("")
         self.house_warning_label.setObjectName("PageSubtitle")
-        self.house_warning_label.setStyleSheet("color: #ffb347;")
+        self.house_warning_label.setProperty("tone", "warning")
         self.house_warning_label.setWordWrap(True)
         self.house_warning_label.setVisible(False)
         house_layout.addWidget(self.house_warning_label)
@@ -3012,6 +3015,12 @@ class MainWindow(QMainWindow):
                     if child_widget is not None and child_widget.layout() is not None:
                         stack.append(child_widget.layout())
 
+    def _set_widget_tone(self, widget: QWidget, tone: str) -> None:
+        widget.setProperty("tone", tone)
+        style = widget.style()
+        style.unpolish(widget)
+        style.polish(widget)
+
     def _apply_styles(self) -> None:
         scale = self._ui_scale
         font_size = max(9, int(round(10 * scale)))
@@ -3028,6 +3037,35 @@ class MainWindow(QMainWindow):
         button_padding_x = max(12, int(round(16 * scale)))
         header_padding = max(7, int(round(10 * scale)))
         scroll_handle_size = max(18, int(round(24 * scale)))
+        tab_radius = max(8, int(round(10 * scale)))
+        scroll_radius = max(4, int(round(6 * scale)))
+
+        theme = {
+            "bg_app": "#0a1018",
+            "bg_surface": "#111a27",
+            "bg_surface_alt": "#0d1520",
+            "bg_surface_disabled": "#0b121c",
+            "bg_surface_strong": "#09111a",
+            "bg_tab": "#101826",
+            "bg_tab_selected": "#172233",
+            "bg_header": "#172233",
+            "border": "#1e2b3f",
+            "border_strong": "#233247",
+            "border_grid": "#1f2d40",
+            "text_primary": "#e7edf7",
+            "text_heading": "#f5f8ff",
+            "text_muted": "#90a4bf",
+            "text_secondary": "#9fb0c7",
+            "text_disabled": "#6f8098",
+            "text_inverse": "#041012",
+            "accent": "#2ec4b6",
+            "accent_hover": "#58d4c8",
+            "accent_pressed": "#25a99e",
+            "success": "#8de59b",
+            "warning": "#ffd166",
+            "danger": "#ff8f8f",
+            "warning_secondary": "#ffb347",
+        }
 
         font = QFont("Segoe UI")
         font.setPointSize(font_size)
@@ -3036,177 +3074,193 @@ class MainWindow(QMainWindow):
         app.setFont(font)
 
         palette = QPalette()
-        palette.setColor(QPalette.Window, QColor("#0a1018"))
-        palette.setColor(QPalette.WindowText, QColor("#e7edf7"))
-        palette.setColor(QPalette.Base, QColor("#0d1520"))
-        palette.setColor(QPalette.AlternateBase, QColor("#111a27"))
-        palette.setColor(QPalette.ToolTipBase, QColor("#172233"))
-        palette.setColor(QPalette.ToolTipText, QColor("#f5f8ff"))
-        palette.setColor(QPalette.Text, QColor("#e7edf7"))
-        palette.setColor(QPalette.Button, QColor("#111a27"))
-        palette.setColor(QPalette.ButtonText, QColor("#e7edf7"))
-        palette.setColor(QPalette.BrightText, QColor("#ffffff"))
-        palette.setColor(QPalette.Highlight, QColor("#2ec4b6"))
-        palette.setColor(QPalette.HighlightedText, QColor("#041012"))
+        palette.setColor(QPalette.Window, QColor(theme["bg_app"]))
+        palette.setColor(QPalette.WindowText, QColor(theme["text_primary"]))
+        palette.setColor(QPalette.Base, QColor(theme["bg_surface_alt"]))
+        palette.setColor(QPalette.AlternateBase, QColor(theme["bg_surface"]))
+        palette.setColor(QPalette.ToolTipBase, QColor(theme["bg_tab_selected"]))
+        palette.setColor(QPalette.ToolTipText, QColor(theme["text_heading"]))
+        palette.setColor(QPalette.Text, QColor(theme["text_primary"]))
+        palette.setColor(QPalette.Button, QColor(theme["bg_surface"]))
+        palette.setColor(QPalette.ButtonText, QColor(theme["text_primary"]))
+        palette.setColor(QPalette.BrightText, QColor(theme["text_heading"]))
+        palette.setColor(QPalette.Highlight, QColor(theme["accent"]))
+        palette.setColor(QPalette.HighlightedText, QColor(theme["text_inverse"]))
         app.setPalette(palette)
+
+        style_values: dict[str, str | int] = {
+            **theme,
+            "font_size": font_size,
+            "tab_padding_y": tab_padding_y,
+            "tab_padding_x": tab_padding_x,
+            "tab_radius": tab_radius,
+            "page_title_size": page_title_size,
+            "subtitle_size": subtitle_size,
+            "section_title_size": section_title_size,
+            "radius_large": radius_large,
+            "metric_value_size": metric_value_size,
+            "radius_medium": radius_medium,
+            "control_padding": control_padding,
+            "button_padding_y": button_padding_y,
+            "button_padding_x": button_padding_x,
+            "header_padding": header_padding,
+            "scroll_handle_size": scroll_handle_size,
+            "scroll_radius": scroll_radius,
+        }
 
         self.setStyleSheet(
             """
             QWidget {
-                color: #e7edf7;
+                color: %(text_primary)s;
                 font-family: 'Segoe UI';
-                font-size: %dpt;
-                background: #0a1018;
+                font-size: %(font_size)dpt;
+                background: %(bg_app)s;
             }
             QMainWindow {
-                background: #0a1018;
+                background: %(bg_app)s;
             }
             QTabWidget::pane {
                 border: 0;
-                background: #0a1018;
+                background: %(bg_app)s;
             }
             QTabBar::tab {
-                background: #101826;
-                color: #9fb0c7;
-                padding: %dpx %dpx;
+                background: %(bg_tab)s;
+                color: %(text_secondary)s;
+                padding: %(tab_padding_y)dpx %(tab_padding_x)dpx;
                 margin-right: 6px;
-                border-top-left-radius: %dpx;
-                border-top-right-radius: %dpx;
+                border-top-left-radius: %(tab_radius)dpx;
+                border-top-right-radius: %(tab_radius)dpx;
             }
             QTabBar::tab:selected {
-                background: #172233;
-                color: #ffffff;
+                background: %(bg_tab_selected)s;
+                color: %(text_heading)s;
             }
             QLabel#PageTitle {
-                font-size: %dpt;
+                font-size: %(page_title_size)dpt;
                 font-weight: 700;
-                color: #f5f8ff;
+                color: %(text_heading)s;
             }
             QLabel#PageSubtitle {
-                font-size: %dpt;
-                color: #90a4bf;
+                font-size: %(subtitle_size)dpt;
+                color: %(text_muted)s;
             }
             QLabel#SectionTitle {
-                font-size: %dpt;
+                font-size: %(section_title_size)dpt;
                 font-weight: 600;
-                color: #f5f8ff;
+                color: %(text_heading)s;
+            }
+            QLabel[tone='muted'] {
+                color: %(text_muted)s;
+            }
+            QLabel[tone='success'] {
+                color: %(success)s;
+            }
+            QLabel[tone='warning'] {
+                color: %(warning_secondary)s;
+            }
+            QLabel[tone='danger'] {
+                color: %(danger)s;
             }
             QFrame#Panel, QFrame#MetricCard {
-                background: #111a27;
-                border: 1px solid #1e2b3f;
-                border-radius: %dpx;
+                background: %(bg_surface)s;
+                border: 1px solid %(border)s;
+                border-radius: %(radius_large)dpx;
             }
             QLabel#MetricCardTitle {
-                color: #90a4bf;
+                color: %(text_muted)s;
                 text-transform: uppercase;
                 letter-spacing: 1px;
             }
             QLabel#MetricCardValue {
-                color: #ffffff;
-                font-size: %dpt;
+                color: %(text_heading)s;
+                font-size: %(metric_value_size)dpt;
                 font-weight: 700;
             }
+            QLabel#MetricCardValue[tone='warning'] {
+                color: %(danger)s;
+            }
             QLineEdit, QDoubleSpinBox, QDateEdit, QComboBox, QTextEdit, QTableWidget {
-                background: #0d1520;
-                color: #e7edf7;
-                border: 1px solid #233247;
-                border-radius: %dpx;
-                padding: %dpx;
-                selection-background-color: #2ec4b6;
+                background: %(bg_surface_alt)s;
+                color: %(text_primary)s;
+                border: 1px solid %(border_strong)s;
+                border-radius: %(radius_medium)dpx;
+                padding: %(control_padding)dpx;
+                selection-background-color: %(accent)s;
             }
             QLineEdit:disabled, QDoubleSpinBox:disabled, QDateEdit:disabled, QComboBox:disabled, QTextEdit:disabled {
-                color: #6f8098;
-                background: #0b121c;
+                color: %(text_disabled)s;
+                background: %(bg_surface_disabled)s;
             }
             QComboBox QAbstractItemView, QMenu, QMenuBar, QCalendarWidget {
-                background: #111a27;
-                color: #e7edf7;
-                selection-background-color: #2ec4b6;
-                selection-color: #041012;
+                background: %(bg_surface)s;
+                color: %(text_primary)s;
+                selection-background-color: %(accent)s;
+                selection-color: %(text_inverse)s;
             }
             QComboBox::drop-down {
                 border: 0;
                 width: 28px;
             }
             QComboBox QAbstractItemView::item, QCalendarWidget QToolButton, QCalendarWidget QSpinBox {
-                background: #111a27;
-                color: #e7edf7;
+                background: %(bg_surface)s;
+                color: %(text_primary)s;
             }
             QAbstractItemView {
-                background: #0d1520;
-                color: #e7edf7;
-                selection-background-color: #2ec4b6;
-                selection-color: #041012;
+                background: %(bg_surface_alt)s;
+                color: %(text_primary)s;
+                selection-background-color: %(accent)s;
+                selection-color: %(text_inverse)s;
             }
             QPushButton {
-                background: #2ec4b6;
-                color: #041012;
+                background: %(accent)s;
+                color: %(text_inverse)s;
                 border: none;
-                border-radius: %dpx;
-                padding: %dpx %dpx;
+                border-radius: %(radius_medium)dpx;
+                padding: %(button_padding_y)dpx %(button_padding_x)dpx;
                 font-weight: 700;
             }
             QPushButton:hover {
-                background: #58d4c8;
+                background: %(accent_hover)s;
             }
             QPushButton:pressed {
-                background: #25a99e;
+                background: %(accent_pressed)s;
             }
             QHeaderView::section {
-                background: #172233;
-                color: #cbd6e8;
-                padding: %dpx;
+                background: %(bg_header)s;
+                color: %(text_secondary)s;
+                padding: %(header_padding)dpx;
                 border: none;
             }
             QTableWidget {
-                gridline-color: #1f2d40;
+                gridline-color: %(border_grid)s;
             }
             QScrollBar:vertical, QScrollBar:horizontal {
-                background: #0a1018;
+                background: %(bg_app)s;
                 border: 0;
                 margin: 0;
             }
             QScrollBar::handle:vertical, QScrollBar::handle:horizontal {
-                background: #233247;
-                border-radius: 6px;
-                min-height: %dpx;
-                min-width: %dpx;
+                background: %(border_strong)s;
+                border-radius: %(scroll_radius)dpx;
+                min-height: %(scroll_handle_size)dpx;
+                min-width: %(scroll_handle_size)dpx;
             }
             QScrollBar::add-line, QScrollBar::sub-line {
                 background: none;
                 border: 0;
             }
             QStatusBar {
-                background: #09111a;
-                color: #9fb0c7;
+                background: %(bg_surface_strong)s;
+                color: %(text_secondary)s;
             }
             QMessageBox {
-                background: #0a1018;
+                background: %(bg_app)s;
             }
             QTextEdit#ChatLog {
-                background: #09111a;
+                background: %(bg_surface_strong)s;
             }
             """
-            % (
-                font_size,
-                tab_padding_y,
-                tab_padding_x,
-                max(8, int(round(10 * scale))),
-                max(8, int(round(10 * scale))),
-                page_title_size,
-                subtitle_size,
-                section_title_size,
-                radius_large,
-                metric_value_size,
-                radius_medium,
-                control_padding,
-                radius_medium,
-                button_padding_y,
-                button_padding_x,
-                header_padding,
-                scroll_handle_size,
-                scroll_handle_size,
-            )
+            % style_values
         )
 
     def refresh_all(self) -> None:
