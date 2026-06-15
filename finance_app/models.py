@@ -6,6 +6,8 @@ from typing import Any, Literal
 
 TransactionKind = Literal["expense", "income"]
 RecurringIntervalUnit = Literal["days", "weeks", "months", "years"]
+AssetType = Literal["house", "investment"]
+ExpenseAllocationType = Literal["mortgage", "principal"]
 
 
 @dataclass(slots=True)
@@ -69,6 +71,31 @@ class Budget:
         if self.budgeted_amount <= 0:
             return 0.0
         return (self.actual_spent / self.budgeted_amount) * 100
+
+
+@dataclass(slots=True)
+class Asset:
+    id: int | None
+    name: str
+    asset_type: AssetType
+    house_value: float = 0.0
+    current_principal: float = 0.0
+    interest_rate_percent: float = 0.0
+    total_mortgage_years: float = 30.0
+    loan_start_on: date | None = None
+    escrow_amount: float = 0.0
+    house_base_total_paid: float = 0.0
+    house_base_interest_paid: float = 0.0
+    house_base_principal_paid: float = 0.0
+    investment_worth: float = 0.0
+    base_total_invested: float = 0.0
+    notes: str = ""
+
+    @property
+    def net_worth(self) -> float:
+        if self.asset_type == "house":
+            return self.house_value - self.current_principal
+        return self.investment_worth
 
 
 @dataclass(slots=True)

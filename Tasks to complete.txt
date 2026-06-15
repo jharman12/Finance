@@ -1,0 +1,5 @@
+Tasks to complete
+
+1.) In the assets tab, all of the combo box inputs should only be inputted in once upon creation. There should be an option to edit this over time. Make sure adding expenses applies changes to these appropiately.
+2.) Make the net worth section at the asset tabs update as expenses changes to the assets are made.
+3.) 

@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Iterator
 
 from finance_app.config import DEFAULT_CATEGORY_SEEDS, DEFAULT_DB_PATH
-from finance_app.models import Budget, Category, RecurringItem, SummarySnapshot, Transaction
+from finance_app.models import Asset, Budget, Category, RecurringItem, SummarySnapshot, Transaction
 
 
 class FinanceRepository:
@@ -82,13 +82,140 @@ class FinanceRepository:
                     key TEXT PRIMARY KEY,
                     value TEXT NOT NULL
                 );
+
+                CREATE TABLE IF NOT EXISTS assets (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL,
+                    asset_type TEXT NOT NULL CHECK(asset_type IN ('house', 'investment')),
+                    amount_invested REAL NOT NULL DEFAULT 0 CHECK(amount_invested >= 0),
+                    current_value REAL NOT NULL DEFAULT 0 CHECK(current_value >= 0),
+                    debt_principal REAL NOT NULL DEFAULT 0 CHECK(debt_principal >= 0),
+                    rate_percent REAL NOT NULL DEFAULT 0,
+                    house_value REAL NOT NULL DEFAULT 0 CHECK(house_value >= 0),
+                    current_principal REAL NOT NULL DEFAULT 0 CHECK(current_principal >= 0),
+                    interest_rate_percent REAL NOT NULL DEFAULT 0,
+                    total_mortgage_years REAL NOT NULL DEFAULT 30 CHECK(total_mortgage_years >= 0),
+                    loan_start_on TEXT,
+                    escrow_amount REAL NOT NULL DEFAULT 0 CHECK(escrow_amount >= 0),
+                    house_base_total_paid REAL NOT NULL DEFAULT 0 CHECK(house_base_total_paid >= 0),
+                    house_base_interest_paid REAL NOT NULL DEFAULT 0 CHECK(house_base_interest_paid >= 0),
+                    house_base_principal_paid REAL NOT NULL DEFAULT 0 CHECK(house_base_principal_paid >= 0),
+                    investment_worth REAL NOT NULL DEFAULT 0 CHECK(investment_worth >= 0),
+                    base_total_invested REAL NOT NULL DEFAULT 0 CHECK(base_total_invested >= 0),
+                    notes TEXT DEFAULT '',
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
+
+                CREATE TABLE IF NOT EXISTS asset_expense_links (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    asset_id INTEGER NOT NULL,
+                    source_type TEXT NOT NULL CHECK(source_type IN ('transaction', 'recurring')),
+                    source_id INTEGER NOT NULL,
+                    payment_kind TEXT NOT NULL DEFAULT 'mortgage' CHECK(payment_kind IN ('mortgage', 'principal')),
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(source_type, source_id),
+                    FOREIGN KEY(asset_id) REFERENCES assets(id) ON DELETE CASCADE
+                );
+
+                CREATE TABLE IF NOT EXISTS asset_value_snapshots (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    asset_id INTEGER NOT NULL,
+                    valued_on TEXT NOT NULL,
+                    value REAL NOT NULL CHECK(value >= 0),
+                    notes TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(asset_id, valued_on),
+                    FOREIGN KEY(asset_id) REFERENCES assets(id) ON DELETE CASCADE
+                );
                 """
             )
+
+        self._ensure_assets_schema()
 
         for category_name, category_kind in DEFAULT_CATEGORY_SEEDS:
             self.ensure_category(category_name, category_kind)
 
         self._rename_category("Rent", "Mortgage", "expense")
+
+    def _ensure_assets_schema(self) -> None:
+        with self._connection() as connection:
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS asset_value_snapshots (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    asset_id INTEGER NOT NULL,
+                    valued_on TEXT NOT NULL,
+                    value REAL NOT NULL CHECK(value >= 0),
+                    notes TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(asset_id, valued_on),
+                    FOREIGN KEY(asset_id) REFERENCES assets(id) ON DELETE CASCADE
+                )
+                """
+            )
+
+            columns = {
+                row["name"]
+                for row in connection.execute("PRAGMA table_info(assets)").fetchall()
+            }
+            link_columns = {
+                row["name"]
+                for row in connection.execute("PRAGMA table_info(asset_expense_links)").fetchall()
+            }
+
+            alter_statements: list[str] = []
+            if "house_value" not in columns:
+                alter_statements.append("ALTER TABLE assets ADD COLUMN house_value REAL NOT NULL DEFAULT 0")
+            if "current_principal" not in columns:
+                alter_statements.append("ALTER TABLE assets ADD COLUMN current_principal REAL NOT NULL DEFAULT 0")
+            if "interest_rate_percent" not in columns:
+                alter_statements.append("ALTER TABLE assets ADD COLUMN interest_rate_percent REAL NOT NULL DEFAULT 0")
+            if "total_mortgage_years" not in columns:
+                alter_statements.append("ALTER TABLE assets ADD COLUMN total_mortgage_years REAL NOT NULL DEFAULT 30")
+            if "loan_start_on" not in columns:
+                alter_statements.append("ALTER TABLE assets ADD COLUMN loan_start_on TEXT")
+            if "escrow_amount" not in columns:
+                alter_statements.append("ALTER TABLE assets ADD COLUMN escrow_amount REAL NOT NULL DEFAULT 0")
+            if "house_base_total_paid" not in columns:
+                alter_statements.append("ALTER TABLE assets ADD COLUMN house_base_total_paid REAL NOT NULL DEFAULT 0")
+            if "house_base_interest_paid" not in columns:
+                alter_statements.append("ALTER TABLE assets ADD COLUMN house_base_interest_paid REAL NOT NULL DEFAULT 0")
+            if "house_base_principal_paid" not in columns:
+                alter_statements.append("ALTER TABLE assets ADD COLUMN house_base_principal_paid REAL NOT NULL DEFAULT 0")
+            if "investment_worth" not in columns:
+                alter_statements.append("ALTER TABLE assets ADD COLUMN investment_worth REAL NOT NULL DEFAULT 0")
+            if "base_total_invested" not in columns:
+                alter_statements.append("ALTER TABLE assets ADD COLUMN base_total_invested REAL NOT NULL DEFAULT 0")
+
+            if "payment_kind" not in link_columns:
+                connection.execute("ALTER TABLE asset_expense_links ADD COLUMN payment_kind TEXT NOT NULL DEFAULT 'mortgage'")
+
+            for statement in alter_statements:
+                connection.execute(statement)
+
+            # Backfill specialized columns from legacy generic columns when present.
+            connection.execute(
+                """
+                UPDATE assets
+                SET
+                    house_value = CASE WHEN house_value = 0 THEN current_value ELSE house_value END,
+                    current_principal = CASE WHEN current_principal = 0 THEN debt_principal ELSE current_principal END,
+                    interest_rate_percent = CASE WHEN interest_rate_percent = 0 THEN rate_percent ELSE interest_rate_percent END,
+                    investment_worth = CASE WHEN investment_worth = 0 THEN current_value ELSE investment_worth END,
+                    base_total_invested = CASE WHEN base_total_invested = 0 THEN amount_invested ELSE base_total_invested END
+                """
+            )
+
+            link_columns = {
+                row["name"]
+                for row in connection.execute("PRAGMA table_info(asset_expense_links)").fetchall()
+            }
+            if "payment_kind" not in link_columns:
+                connection.execute("ALTER TABLE asset_expense_links ADD COLUMN payment_kind TEXT NOT NULL DEFAULT 'mortgage'")
+                connection.execute(
+                    "UPDATE asset_expense_links SET payment_kind = 'mortgage' WHERE payment_kind IS NULL OR payment_kind = ''"
+                )
 
     def _rename_category(self, old_name: str, new_name: str, kind: str) -> None:
         old_clean = old_name.strip()
@@ -292,6 +419,532 @@ class FinanceRepository:
                 "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
                 (cleaned_key, value),
             )
+
+    def add_asset(
+        self,
+        name: str,
+        asset_type: str,
+        house_value: float = 0.0,
+        current_principal: float = 0.0,
+        interest_rate_percent: float = 0.0,
+        total_mortgage_years: float = 30.0,
+        loan_start_on: date | None = None,
+        escrow_amount: float = 0.0,
+        house_base_total_paid: float = 0.0,
+        house_base_interest_paid: float = 0.0,
+        house_base_principal_paid: float = 0.0,
+        investment_worth: float = 0.0,
+        base_total_invested: float = 0.0,
+        notes: str = "",
+    ) -> int:
+        cleaned_name = name.strip()
+        cleaned_type = asset_type.strip().lower()
+        cleaned_notes = notes.strip()
+
+        if not cleaned_name:
+            raise ValueError("Asset name is required.")
+        if cleaned_type not in ("house", "investment"):
+            raise ValueError("Asset type must be 'house' or 'investment'.")
+        if min(
+            house_value,
+            current_principal,
+            house_base_total_paid,
+            house_base_interest_paid,
+            house_base_principal_paid,
+            escrow_amount,
+            investment_worth,
+            base_total_invested,
+        ) < 0:
+            raise ValueError("Asset amounts must be non-negative.")
+
+        with self._connection() as connection:
+            cursor = connection.execute(
+                """
+                INSERT INTO assets (
+                    name, asset_type, house_value, current_principal, interest_rate_percent,
+                    total_mortgage_years, loan_start_on, escrow_amount, house_base_total_paid, house_base_interest_paid,
+                    house_base_principal_paid, investment_worth, base_total_invested,
+                    amount_invested, current_value, debt_principal, rate_percent, notes
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    cleaned_name,
+                    cleaned_type,
+                    float(house_value),
+                    float(current_principal),
+                    float(interest_rate_percent),
+                    float(total_mortgage_years),
+                    loan_start_on.isoformat() if loan_start_on else None,
+                    float(escrow_amount),
+                    float(house_base_total_paid),
+                    float(house_base_interest_paid),
+                    float(house_base_principal_paid),
+                    float(investment_worth),
+                    float(base_total_invested),
+                    float(base_total_invested),
+                    float(house_value if cleaned_type == "house" else investment_worth),
+                    float(current_principal),
+                    float(interest_rate_percent),
+                    cleaned_notes,
+                ),
+            )
+            return int(cursor.lastrowid)
+
+    def update_asset(
+        self,
+        asset_id: int,
+        name: str,
+        asset_type: str,
+        house_value: float,
+        current_principal: float,
+        interest_rate_percent: float,
+        total_mortgage_years: float,
+        loan_start_on: date | None,
+        escrow_amount: float,
+        house_base_total_paid: float,
+        house_base_interest_paid: float,
+        house_base_principal_paid: float,
+        investment_worth: float,
+        base_total_invested: float,
+        notes: str = "",
+    ) -> bool:
+        cleaned_name = name.strip()
+        cleaned_type = asset_type.strip().lower()
+        cleaned_notes = notes.strip()
+
+        if not cleaned_name or cleaned_type not in ("house", "investment"):
+            return False
+        if min(
+            house_value,
+            current_principal,
+            escrow_amount,
+            house_base_total_paid,
+            house_base_interest_paid,
+            house_base_principal_paid,
+            investment_worth,
+            base_total_invested,
+        ) < 0:
+            return False
+
+        with self._connection() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE assets
+                SET
+                    name = ?,
+                    asset_type = ?,
+                    house_value = ?,
+                    current_principal = ?,
+                    interest_rate_percent = ?,
+                    total_mortgage_years = ?,
+                    loan_start_on = ?,
+                    escrow_amount = ?,
+                    house_base_total_paid = ?,
+                    house_base_interest_paid = ?,
+                    house_base_principal_paid = ?,
+                    investment_worth = ?,
+                    base_total_invested = ?,
+                    amount_invested = ?,
+                    current_value = ?,
+                    debt_principal = ?,
+                    rate_percent = ?,
+                    notes = ?,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (
+                    cleaned_name,
+                    cleaned_type,
+                    float(house_value),
+                    float(current_principal),
+                    float(interest_rate_percent),
+                    float(total_mortgage_years),
+                    loan_start_on.isoformat() if loan_start_on else None,
+                    float(escrow_amount),
+                    float(house_base_total_paid),
+                    float(house_base_interest_paid),
+                    float(house_base_principal_paid),
+                    float(investment_worth),
+                    float(base_total_invested),
+                    float(base_total_invested),
+                    float(house_value if cleaned_type == "house" else investment_worth),
+                    float(current_principal),
+                    float(interest_rate_percent),
+                    cleaned_notes,
+                    int(asset_id),
+                ),
+            )
+            return cursor.rowcount > 0
+
+    def delete_asset(self, asset_id: int) -> bool:
+        with self._connection() as connection:
+            connection.execute("DELETE FROM asset_expense_links WHERE asset_id = ?", (int(asset_id),))
+            connection.execute("DELETE FROM asset_value_snapshots WHERE asset_id = ?", (int(asset_id),))
+            cursor = connection.execute("DELETE FROM assets WHERE id = ?", (int(asset_id),))
+            return cursor.rowcount > 0
+
+    def record_investment_value_snapshot(
+        self,
+        asset_id: int,
+        value: float,
+        valued_on: date | None = None,
+        notes: str = "",
+    ) -> bool:
+        cleaned_value = float(value)
+        if cleaned_value < 0:
+            return False
+
+        snapshot_date = valued_on or date.today()
+        with self._connection() as connection:
+            asset = connection.execute(
+                "SELECT asset_type FROM assets WHERE id = ?",
+                (int(asset_id),),
+            ).fetchone()
+            if asset is None or asset["asset_type"] != "investment":
+                return False
+
+            connection.execute(
+                """
+                INSERT INTO asset_value_snapshots (asset_id, valued_on, value, notes)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(asset_id, valued_on)
+                DO UPDATE SET value = excluded.value, notes = excluded.notes
+                """,
+                (int(asset_id), snapshot_date.isoformat(), cleaned_value, notes.strip()),
+            )
+
+            cursor = connection.execute(
+                """
+                UPDATE assets
+                SET investment_worth = ?,
+                    current_value = ?,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = ? AND asset_type = 'investment'
+                """,
+                (cleaned_value, cleaned_value, int(asset_id)),
+            )
+            return cursor.rowcount > 0
+
+    def list_asset_value_snapshots(self, asset_id: int, limit: int = 24) -> list[dict[str, object]]:
+        with self._connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT id, valued_on, value, notes, created_at
+                FROM asset_value_snapshots
+                WHERE asset_id = ?
+                ORDER BY valued_on DESC, id DESC
+                LIMIT ?
+                """,
+                (int(asset_id), int(limit)),
+            ).fetchall()
+
+        return [
+            {
+                "id": int(row["id"]),
+                "valued_on": date.fromisoformat(row["valued_on"]),
+                "value": float(row["value"]),
+                "notes": row["notes"] or "",
+                "created_at": row["created_at"],
+            }
+            for row in rows
+        ]
+
+    def get_asset_by_id(self, asset_id: int) -> Asset | None:
+        with self._connection() as connection:
+            row = connection.execute(
+                """
+                SELECT id, name, asset_type, house_value, current_principal, interest_rate_percent,
+                        total_mortgage_years, loan_start_on, escrow_amount, house_base_total_paid, house_base_interest_paid,
+                      house_base_principal_paid, investment_worth, base_total_invested, notes
+                FROM assets
+                WHERE id = ?
+                """,
+                (int(asset_id),),
+            ).fetchone()
+        if not row:
+            return None
+        return Asset(
+            id=int(row["id"]),
+            name=row["name"],
+            asset_type=row["asset_type"],
+            house_value=float(row["house_value"]),
+            current_principal=float(row["current_principal"]),
+            interest_rate_percent=float(row["interest_rate_percent"]),
+            total_mortgage_years=float(row["total_mortgage_years"]),
+            loan_start_on=date.fromisoformat(row["loan_start_on"]) if row["loan_start_on"] else None,
+            escrow_amount=float(row["escrow_amount"]),
+            house_base_total_paid=float(row["house_base_total_paid"]),
+            house_base_interest_paid=float(row["house_base_interest_paid"]),
+            house_base_principal_paid=float(row["house_base_principal_paid"]),
+            investment_worth=float(row["investment_worth"]),
+            base_total_invested=float(row["base_total_invested"]),
+            notes=row["notes"] or "",
+        )
+
+    def list_assets(self, asset_type: str | None = None) -> list[Asset]:
+        query = (
+            "SELECT id, name, asset_type, house_value, current_principal, interest_rate_percent, "
+            "total_mortgage_years, loan_start_on, escrow_amount, house_base_total_paid, house_base_interest_paid, "
+            "house_base_principal_paid, investment_worth, base_total_invested, notes "
+            "FROM assets"
+        )
+        parameters: list[object] = []
+        if asset_type:
+            query += " WHERE asset_type = ?"
+            parameters.append(asset_type.strip().lower())
+        query += " ORDER BY asset_type ASC, name ASC"
+
+        with self._connection() as connection:
+            rows = connection.execute(query, parameters).fetchall()
+
+        return [
+            Asset(
+                id=int(row["id"]),
+                name=row["name"],
+                asset_type=row["asset_type"],
+                house_value=float(row["house_value"]),
+                current_principal=float(row["current_principal"]),
+                interest_rate_percent=float(row["interest_rate_percent"]),
+                total_mortgage_years=float(row["total_mortgage_years"]),
+                loan_start_on=date.fromisoformat(row["loan_start_on"]) if row["loan_start_on"] else None,
+                escrow_amount=float(row["escrow_amount"]),
+                house_base_total_paid=float(row["house_base_total_paid"]),
+                house_base_interest_paid=float(row["house_base_interest_paid"]),
+                house_base_principal_paid=float(row["house_base_principal_paid"]),
+                investment_worth=float(row["investment_worth"]),
+                base_total_invested=float(row["base_total_invested"]),
+                notes=row["notes"] or "",
+            )
+            for row in rows
+        ]
+
+    def list_expense_transactions(self, limit: int = 250) -> list[Transaction]:
+        with self._connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT id, kind, amount, category, description, occurred_on, created_at
+                FROM transactions
+                WHERE kind = 'expense'
+                ORDER BY occurred_on DESC, id DESC
+                LIMIT ?
+                """,
+                (int(limit),),
+            ).fetchall()
+        return [
+            Transaction(
+                id=int(row["id"]),
+                kind=row["kind"],
+                amount=float(row["amount"]),
+                category=row["category"],
+                description=row["description"],
+                occurred_on=date.fromisoformat(row["occurred_on"]),
+                created_at=datetime.fromisoformat(row["created_at"]) if row["created_at"] else None,
+            )
+            for row in rows
+        ]
+
+    def link_expense_to_asset(
+        self,
+        asset_id: int,
+        source_type: str,
+        source_id: int,
+        payment_kind: str = "mortgage",
+    ) -> int:
+        cleaned_type = source_type.strip().lower()
+        if cleaned_type not in ("transaction", "recurring"):
+            raise ValueError("Unsupported source type.")
+        cleaned_kind = payment_kind.strip().lower()
+        if cleaned_kind not in ("mortgage", "principal"):
+            raise ValueError("Unsupported payment kind.")
+        with self._connection() as connection:
+            cursor = connection.execute(
+                """
+                INSERT INTO asset_expense_links (asset_id, source_type, source_id, payment_kind)
+                VALUES (?, ?, ?, ?)
+                """,
+                (int(asset_id), cleaned_type, int(source_id), cleaned_kind),
+            )
+            return int(cursor.lastrowid)
+
+    def unlink_expense_from_asset(self, link_id: int) -> bool:
+        with self._connection() as connection:
+            cursor = connection.execute("DELETE FROM asset_expense_links WHERE id = ?", (int(link_id),))
+            return cursor.rowcount > 0
+
+    def get_expense_asset_link(self, source_type: str, source_id: int) -> dict[str, object] | None:
+        cleaned_type = source_type.strip().lower()
+        if cleaned_type not in ("transaction", "recurring"):
+            raise ValueError("Unsupported source type.")
+        with self._connection() as connection:
+            row = connection.execute(
+                """
+                SELECT id, asset_id, payment_kind
+                FROM asset_expense_links
+                WHERE source_type = ? AND source_id = ?
+                """,
+                (cleaned_type, int(source_id)),
+            ).fetchone()
+        if row is None:
+            return None
+        return {"link_id": int(row["id"]), "asset_id": int(row["asset_id"]), "payment_kind": row["payment_kind"]}
+
+    def set_expense_asset_link(
+        self,
+        asset_id: int | None,
+        source_type: str,
+        source_id: int,
+        payment_kind: str = "mortgage",
+    ) -> None:
+        cleaned_type = source_type.strip().lower()
+        if cleaned_type not in ("transaction", "recurring"):
+            raise ValueError("Unsupported source type.")
+        cleaned_kind = payment_kind.strip().lower()
+        if cleaned_kind not in ("mortgage", "principal"):
+            raise ValueError("Unsupported payment kind.")
+        with self._connection() as connection:
+            if asset_id is None:
+                connection.execute(
+                    "DELETE FROM asset_expense_links WHERE source_type = ? AND source_id = ?",
+                    (cleaned_type, int(source_id)),
+                )
+                return
+
+            connection.execute(
+                """
+                INSERT INTO asset_expense_links (asset_id, source_type, source_id, payment_kind)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(source_type, source_id)
+                DO UPDATE SET asset_id = excluded.asset_id, payment_kind = excluded.payment_kind
+                """,
+                (int(asset_id), cleaned_type, int(source_id), cleaned_kind),
+            )
+
+    def list_asset_expense_links(self, asset_id: int) -> list[dict[str, object]]:
+        with self._connection() as connection:
+            link_rows = connection.execute(
+                """
+                SELECT id, source_type, source_id, payment_kind
+                FROM asset_expense_links
+                WHERE asset_id = ?
+                ORDER BY id DESC
+                """,
+                (int(asset_id),),
+            ).fetchall()
+
+        linked: list[dict[str, object]] = []
+        for row in link_rows:
+            source_type = row["source_type"]
+            source_id = int(row["source_id"])
+            payment_kind = row["payment_kind"]
+            if source_type == "transaction":
+                tx = self.get_transaction_by_id(source_id)
+                if tx is None or tx.kind != "expense":
+                    continue
+                linked.append(
+                    {
+                        "link_id": int(row["id"]),
+                        "source_type": "transaction",
+                        "source_id": tx.id,
+                        "payment_kind": payment_kind,
+                        "amount": tx.amount,
+                        "label": f"{tx.occurred_on.isoformat()} | {tx.category} | {tx.description} | {payment_kind.title()}",
+                        "date": tx.occurred_on,
+                        "interval_count": None,
+                    }
+                )
+            else:
+                recurring = next((item for item in self.list_recurring_items() if item.id == source_id and item.kind == "expense"), None)
+                if recurring is None:
+                    continue
+                occurrence_date = recurring.start_on
+                today = date.today()
+                while occurrence_date <= today:
+                    linked.append(
+                        {
+                            "link_id": int(row["id"]),
+                            "source_type": "recurring",
+                            "source_id": recurring.id,
+                            "payment_kind": payment_kind,
+                            "amount": recurring.amount,
+                            "label": f"Recurring | {recurring.category} | {recurring.description} | {payment_kind.title()} | {occurrence_date.isoformat()}",
+                            "date": occurrence_date,
+                            "interval_count": recurring.interval_count,
+                        }
+                    )
+                    occurrence_date = self._advance_months(occurrence_date, recurring.interval_count)
+
+        linked.sort(key=lambda item: (item["date"] if isinstance(item["date"], date) else date.today()), reverse=True)
+        return linked
+
+    def list_unlinked_expense_transactions(self, asset_id: int | None = None, limit: int = 250) -> list[Transaction]:
+        query = (
+            """
+            SELECT t.id, t.kind, t.amount, t.category, t.description, t.occurred_on, t.created_at
+            FROM transactions t
+            WHERE t.kind = 'expense'
+              AND t.id NOT IN (
+                  SELECT source_id FROM asset_expense_links WHERE source_type = 'transaction'
+              )
+            ORDER BY t.occurred_on DESC, t.id DESC
+            LIMIT ?
+            """
+        )
+        with self._connection() as connection:
+            rows = connection.execute(query, (int(limit),)).fetchall()
+
+        return [
+            Transaction(
+                id=int(row["id"]),
+                kind=row["kind"],
+                amount=float(row["amount"]),
+                category=row["category"],
+                description=row["description"],
+                occurred_on=date.fromisoformat(row["occurred_on"]),
+                created_at=datetime.fromisoformat(row["created_at"]) if row["created_at"] else None,
+            )
+            for row in rows
+        ]
+
+    def list_unlinked_recurring_expenses(self) -> list[RecurringItem]:
+        linked_ids: set[int] = set()
+        with self._connection() as connection:
+            rows = connection.execute(
+                "SELECT source_id FROM asset_expense_links WHERE source_type = 'recurring'"
+            ).fetchall()
+            linked_ids = {int(row["source_id"]) for row in rows}
+
+        return [
+            item
+            for item in self.list_recurring_items(active_only=True)
+            if item.kind == "expense" and item.id is not None and int(item.id) not in linked_ids
+        ]
+
+    def assets_overview(self) -> dict[str, float]:
+        assets = self.list_assets()
+        total_invested = 0.0
+        total_value = 0.0
+        total_debt = 0.0
+        for asset in assets:
+            if asset.asset_type == "house":
+                total_value += asset.house_value
+                total_debt += asset.current_principal
+            else:
+                linked_contributions = 0.0
+                if asset.id is not None:
+                    linked_contributions = sum(
+                        float(link["amount"]) for link in self.list_asset_expense_links(int(asset.id))
+                    )
+                total_value += asset.investment_worth
+                total_invested += asset.base_total_invested + linked_contributions
+                continue
+            total_invested += asset.base_total_invested
+        return {
+            "total_invested": total_invested,
+            "total_value": total_value,
+            "total_debt": total_debt,
+            "total_net_worth": total_value - total_debt,
+        }
 
     def add_transaction(
         self,
@@ -1070,6 +1723,43 @@ class FinanceRepository:
                 writer.writerow(dict(row))
         counts["budgets"] = len(rows)
 
+        # assets.csv
+        with self._connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT name, asset_type, house_value, current_principal, interest_rate_percent,
+                       total_mortgage_years, loan_start_on, escrow_amount, house_base_total_paid,
+                       house_base_interest_paid, house_base_principal_paid, investment_worth,
+                       base_total_invested, notes
+                FROM assets
+                ORDER BY asset_type ASC, name ASC
+                """
+            ).fetchall()
+        with open(output_dir / "assets.csv", "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(
+                f,
+                fieldnames=[
+                    "name",
+                    "asset_type",
+                    "house_value",
+                    "current_principal",
+                    "interest_rate_percent",
+                    "total_mortgage_years",
+                    "loan_start_on",
+                    "escrow_amount",
+                    "house_base_total_paid",
+                    "house_base_interest_paid",
+                    "house_base_principal_paid",
+                    "investment_worth",
+                    "base_total_invested",
+                    "notes",
+                ],
+            )
+            writer.writeheader()
+            for row in rows:
+                writer.writerow(dict(row))
+        counts["assets"] = len(rows)
+
         return counts
 
     def import_from_csv(self, directory: str | Path, clear_first: bool = False) -> dict[str, int]:
@@ -1087,6 +1777,7 @@ class FinanceRepository:
 
         if clear_first:
             with self._connection() as conn:
+                conn.execute("DELETE FROM assets")
                 conn.execute("DELETE FROM budgets")
                 conn.execute("DELETE FROM recurring_items")
                 conn.execute("DELETE FROM transactions")
@@ -1181,5 +1872,34 @@ class FinanceRepository:
                     except (KeyError, ValueError):
                         continue
             counts["budgets"] = imported
+
+        # assets.csv
+        assets_file = input_dir / "assets.csv"
+        if assets_file.exists():
+            imported = 0
+            with open(assets_file, newline="", encoding="utf-8") as f:
+                for row in csv.DictReader(f):
+                    try:
+                        loan_start_text = row.get("loan_start_on", "").strip()
+                        self.add_asset(
+                            name=row["name"].strip(),
+                            asset_type=row["asset_type"].strip().lower(),
+                            house_value=float(row.get("house_value", row.get("current_value", 0)) or 0),
+                            current_principal=float(row.get("current_principal", row.get("debt_principal", 0)) or 0),
+                            interest_rate_percent=float(row.get("interest_rate_percent", row.get("rate_percent", 0)) or 0),
+                            total_mortgage_years=float(row.get("total_mortgage_years", 30) or 30),
+                            loan_start_on=date.fromisoformat(loan_start_text) if loan_start_text else None,
+                            escrow_amount=float(row.get("escrow_amount", 0) or 0),
+                            house_base_total_paid=float(row.get("house_base_total_paid", 0) or 0),
+                            house_base_interest_paid=float(row.get("house_base_interest_paid", 0) or 0),
+                            house_base_principal_paid=float(row.get("house_base_principal_paid", 0) or 0),
+                            investment_worth=float(row.get("investment_worth", row.get("current_value", 0)) or 0),
+                            base_total_invested=float(row.get("base_total_invested", row.get("amount_invested", 0)) or 0),
+                            notes=row.get("notes", "").strip(),
+                        )
+                        imported += 1
+                    except (KeyError, ValueError):
+                        continue
+            counts["assets"] = imported
 
         return counts

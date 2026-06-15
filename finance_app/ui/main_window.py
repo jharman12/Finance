@@ -1,8 +1,9 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from datetime import date
 import calendar
 import html
+import math
 import re
 
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
@@ -43,7 +44,7 @@ from PyQt5.QtWidgets import (
 )
 
 from finance_app.config import APP_NAME
-from finance_app.models import AssistantResult, Transaction
+from finance_app.models import Asset, AssistantResult, Transaction
 from finance_app.services.assistant_service import AssistantService
 from finance_app.services.voice_pipeline import VoiceCoordinator
 from finance_app.storage import FinanceRepository
@@ -123,6 +124,8 @@ class MainWindow(QMainWindow):
         self._ollama_warmup_worker: OllamaWarmupWorker | None = None
         self._selected_year = date.today().year
         self._selected_month = date.today().month
+        self._selected_asset_id: int | None = None
+        self._is_refreshing_asset_selector = False
 
         self.setWindowTitle(APP_NAME)
         self.resize(1400, 880)
@@ -135,6 +138,7 @@ class MainWindow(QMainWindow):
         self.ledger_tab = QWidget()
         self.recurring_tab = QWidget()
         self.budget_tab = QWidget()
+        self.assets_tab = QWidget()
         self.assistant_tab = QWidget()
 
         self.tabs.addTab(self.dashboard_tab, "Overview")
@@ -142,6 +146,7 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.ledger_tab, "Ledger")
         self.tabs.addTab(self.recurring_tab, "Recurring")
         self.tabs.addTab(self.budget_tab, "Budget")
+        self.tabs.addTab(self.assets_tab, "Assets")
         self.tabs.addTab(self.assistant_tab, "Assistant")
 
         self.status_bar = QStatusBar()
@@ -153,6 +158,7 @@ class MainWindow(QMainWindow):
         self._build_ledger_tab()
         self._build_recurring_tab()
         self._build_budget_tab()
+        self._build_assets_tab()
         self._build_assistant_tab()
         self._build_menu_bar()
 
@@ -315,10 +321,16 @@ class MainWindow(QMainWindow):
         self.expense_date = QDateEdit()
         self.expense_date.setCalendarPopup(True)
         self.expense_date.setDate(QDate.currentDate())
+        self.expense_asset_link_combo = QComboBox()
+        self.expense_asset_payment_kind_combo = QComboBox()
+        self.expense_asset_payment_kind_combo.addItem("Mortgage", "mortgage")
+        self.expense_asset_payment_kind_combo.addItem("Principal", "principal")
         expense_form.addRow("Amount", self.expense_amount)
         expense_form.addRow("Category", self.expense_category)
         expense_form.addRow("Description", self.expense_description)
         expense_form.addRow("Date", self.expense_date)
+        expense_form.addRow("Link To Asset", self.expense_asset_link_combo)
+        expense_form.addRow("Apply As", self.expense_asset_payment_kind_combo)
         layout.addLayout(expense_form)
 
         expense_button = QPushButton("Add Expense")
@@ -395,6 +407,10 @@ class MainWindow(QMainWindow):
         self.recurring_start_date = QDateEdit()
         self.recurring_start_date.setCalendarPopup(True)
         self.recurring_start_date.setDate(QDate.currentDate())
+        self.recurring_asset_link_combo = QComboBox()
+        self.recurring_asset_payment_kind_combo = QComboBox()
+        self.recurring_asset_payment_kind_combo.addItem("Mortgage", "mortgage")
+        self.recurring_asset_payment_kind_combo.addItem("Principal", "principal")
 
         panel_layout.addWidget(QLabel("Type"), 0, 0)
         panel_layout.addWidget(self.recurring_kind, 0, 1)
@@ -410,6 +426,10 @@ class MainWindow(QMainWindow):
         panel_layout.addWidget(self.recurring_interval_unit, 2, 3)
         panel_layout.addWidget(QLabel("Start date"), 3, 0)
         panel_layout.addWidget(self.recurring_start_date, 3, 1)
+        panel_layout.addWidget(QLabel("Link To Asset"), 3, 2)
+        panel_layout.addWidget(self.recurring_asset_link_combo, 3, 3)
+        panel_layout.addWidget(QLabel("Apply As"), 4, 0)
+        panel_layout.addWidget(self.recurring_asset_payment_kind_combo, 4, 1)
 
         self.recurring_add_button = QPushButton("Add Recurring Item")
         self.recurring_add_button.clicked.connect(self.add_recurring_item)
@@ -1127,6 +1147,926 @@ class MainWindow(QMainWindow):
             else:
                 QMessageBox.critical(self, APP_NAME, "Failed to delete category.")
 
+    def _build_assets_tab(self) -> None:
+        layout = QVBoxLayout(self.assets_tab)
+        layout.setContentsMargins(24, 24, 24, 24)
+        layout.setSpacing(18)
+
+        title = QLabel("Asset Portfolio")
+        title.setObjectName("PageTitle")
+        subtitle = QLabel("Manage houses and investments with linked expenses and asset-level performance.")
+        subtitle.setObjectName("PageSubtitle")
+        layout.addWidget(title)
+        layout.addWidget(subtitle)
+
+        # Keep top summary group unchanged.
+        overview_panel = QFrame()
+        overview_panel.setObjectName("Panel")
+        overview_layout = QGridLayout(overview_panel)
+        overview_layout.setContentsMargins(18, 18, 18, 18)
+        overview_layout.setSpacing(16)
+        self.assets_total_net_worth_card = MetricCard("Overall Net Worth", "$0.00")
+        self.assets_total_value_card = MetricCard("Total Asset Value", "$0.00")
+        self.assets_total_debt_card = MetricCard("Total Principal", "$0.00")
+        self.assets_total_invested_card = MetricCard("Total Contributed", "$0.00")
+        overview_layout.addWidget(self.assets_total_net_worth_card, 0, 0)
+        overview_layout.addWidget(self.assets_total_value_card, 0, 1)
+        overview_layout.addWidget(self.assets_total_debt_card, 1, 0)
+        overview_layout.addWidget(self.assets_total_invested_card, 1, 1)
+        layout.addWidget(overview_panel)
+
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setFrameShape(QFrame.NoFrame)
+        layout.addWidget(scroll_area, 1)
+
+        scroll_content = QWidget()
+        scroll_area.setWidget(scroll_content)
+        scroll_layout = QVBoxLayout(scroll_content)
+        scroll_layout.setContentsMargins(0, 0, 0, 0)
+        scroll_layout.setSpacing(14)
+
+        selector_panel = QFrame()
+        selector_panel.setObjectName("Panel")
+        selector_panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        selector_layout = QHBoxLayout(selector_panel)
+        selector_layout.setContentsMargins(18, 18, 18, 18)
+        selector_layout.setSpacing(12)
+        selector_layout.addWidget(QLabel("Owned Asset"))
+        self.asset_selector_combo = QComboBox()
+        self.asset_selector_combo.currentIndexChanged.connect(self._handle_asset_selection_changed)
+        selector_layout.addWidget(self.asset_selector_combo, 1)
+        self.asset_add_new_button = QPushButton("Add New Asset")
+        self.asset_add_new_button.clicked.connect(self._add_new_asset_dialog)
+        selector_layout.addWidget(self.asset_add_new_button)
+        scroll_layout.addWidget(selector_panel)
+
+        self.asset_detail_panel = QFrame()
+        self.asset_detail_panel.setObjectName("Panel")
+        self.asset_detail_panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        detail_layout = QVBoxLayout(self.asset_detail_panel)
+        detail_layout.setContentsMargins(18, 18, 18, 18)
+        detail_layout.setSpacing(14)
+        self.asset_name_label = QLabel("No asset selected")
+        self.asset_name_label.setObjectName("SectionTitle")
+        detail_layout.addWidget(self.asset_name_label)
+
+        # House inputs.
+        self.house_panel = QFrame()
+        house_layout = QVBoxLayout(self.house_panel)
+        house_layout.setContentsMargins(0, 0, 0, 0)
+        house_layout.setSpacing(10)
+        self.house_tracking_hint = QLabel(
+            "Add mortgage payments in Expenses or Recurring, then set Link To Asset and Apply As to auto-track principal and interest."
+        )
+        self.house_tracking_hint.setObjectName("PageSubtitle")
+        self.house_tracking_hint.setWordWrap(True)
+        house_layout.addWidget(self.house_tracking_hint)
+        self.house_warning_label = QLabel("")
+        self.house_warning_label.setObjectName("PageSubtitle")
+        self.house_warning_label.setStyleSheet("color: #ffb347;")
+        self.house_warning_label.setWordWrap(True)
+        self.house_warning_label.setVisible(False)
+        house_layout.addWidget(self.house_warning_label)
+        house_grid = QGridLayout()
+        self.house_value_input = QDoubleSpinBox(); self.house_value_input.setMaximum(1_000_000_000); self.house_value_input.setDecimals(2); self.house_value_input.setPrefix("$")
+        self.house_principal_input = QDoubleSpinBox(); self.house_principal_input.setMaximum(1_000_000_000); self.house_principal_input.setDecimals(2); self.house_principal_input.setPrefix("$")
+        self.house_rate_input = QDoubleSpinBox(); self.house_rate_input.setMaximum(1000); self.house_rate_input.setDecimals(3); self.house_rate_input.setSuffix("%")
+        self.house_term_years_input = QDoubleSpinBox(); self.house_term_years_input.setMaximum(100); self.house_term_years_input.setDecimals(2); self.house_term_years_input.setValue(30)
+        self.house_loan_start_input = QDateEdit(); self.house_loan_start_input.setCalendarPopup(True); self.house_loan_start_input.setDate(QDate.currentDate())
+        self.house_escrow_input = QDoubleSpinBox(); self.house_escrow_input.setMaximum(1_000_000_000); self.house_escrow_input.setDecimals(2); self.house_escrow_input.setPrefix("$")
+        self.house_base_total_paid_input = QDoubleSpinBox(); self.house_base_total_paid_input.setMaximum(1_000_000_000); self.house_base_total_paid_input.setDecimals(2); self.house_base_total_paid_input.setPrefix("$")
+        self.house_base_interest_paid_input = QDoubleSpinBox(); self.house_base_interest_paid_input.setMaximum(1_000_000_000); self.house_base_interest_paid_input.setDecimals(2); self.house_base_interest_paid_input.setPrefix("$")
+        self.house_base_principal_paid_input = QDoubleSpinBox(); self.house_base_principal_paid_input.setMaximum(1_000_000_000); self.house_base_principal_paid_input.setDecimals(2); self.house_base_principal_paid_input.setPrefix("$")
+        house_grid.addWidget(QLabel("House Value"), 0, 0); house_grid.addWidget(self.house_value_input, 0, 1)
+        house_grid.addWidget(QLabel("Current Principal"), 0, 2); house_grid.addWidget(self.house_principal_input, 0, 3)
+        house_grid.addWidget(QLabel("Interest Rate"), 1, 0); house_grid.addWidget(self.house_rate_input, 1, 1)
+        house_grid.addWidget(QLabel("Total Mortgage Years"), 1, 2); house_grid.addWidget(self.house_term_years_input, 1, 3)
+        house_grid.addWidget(QLabel("Loan Start"), 2, 0); house_grid.addWidget(self.house_loan_start_input, 2, 1)
+        house_grid.addWidget(QLabel("Escrow Amount"), 2, 2); house_grid.addWidget(self.house_escrow_input, 2, 3)
+        house_grid.addWidget(QLabel("Base Total Paid"), 3, 0); house_grid.addWidget(self.house_base_total_paid_input, 3, 1)
+        house_grid.addWidget(QLabel("Base Interest Paid"), 3, 2); house_grid.addWidget(self.house_base_interest_paid_input, 3, 3)
+        house_grid.addWidget(QLabel("Base Principal Paid"), 4, 0); house_grid.addWidget(self.house_base_principal_paid_input, 4, 1)
+        house_layout.addLayout(house_grid)
+        for _w in [self.house_value_input, self.house_principal_input, self.house_rate_input,
+                   self.house_term_years_input, self.house_loan_start_input, self.house_escrow_input,
+                   self.house_base_total_paid_input, self.house_base_interest_paid_input,
+                   self.house_base_principal_paid_input]:
+            _w.setEnabled(False)
+
+        house_metrics = QGridLayout()
+        self.house_total_paid_card = MetricCard("Total Paid", "$0.00")
+        self.house_total_principal_paid_card = MetricCard("Total Principal Paid", "$0.00")
+        self.house_total_interest_paid_card = MetricCard("Total Interest Paid", "$0.00")
+        self.house_total_escrow_paid_card = MetricCard("Total Escrow Paid", "$0.00")
+        self.house_total_housing_cost_card = MetricCard("Total Housing Cost", "$0.00")
+        self.house_years_elapsed_card = MetricCard("Mortgage Years (Elapsed)", "0.00")
+        self.house_years_left_card = MetricCard("Years Left", "0.00")
+        self.house_asset_net_worth_card = MetricCard("Asset Net Worth", "$0.00")
+        house_metrics.addWidget(self.house_total_paid_card, 0, 0)
+        house_metrics.addWidget(self.house_total_principal_paid_card, 0, 1)
+        house_metrics.addWidget(self.house_total_interest_paid_card, 0, 2)
+        house_metrics.addWidget(self.house_total_escrow_paid_card, 1, 0)
+        house_metrics.addWidget(self.house_total_housing_cost_card, 1, 1)
+        house_metrics.addWidget(self.house_asset_net_worth_card, 1, 2)
+        house_metrics.addWidget(self.house_years_elapsed_card, 2, 0)
+        house_metrics.addWidget(self.house_years_left_card, 2, 1)
+        house_layout.addLayout(house_metrics)
+
+        self.house_payment_breakdown_table = QTableWidget(0, 10)
+        self.house_payment_breakdown_table.setHorizontalHeaderLabels(
+            [
+                "Date",
+                "Source",
+                "Payment Type",
+                "Gross Payment",
+                "Escrow",
+                "Mortgage Net",
+                "Interest",
+                "Principal",
+                "Running Principal",
+                "Running Total Paid",
+            ]
+        )
+        self.house_payment_breakdown_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.house_payment_breakdown_table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.house_payment_breakdown_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.house_payment_breakdown_table.horizontalHeader().setStretchLastSection(True)
+        house_layout.addWidget(self.house_payment_breakdown_table)
+
+        self.asset_house_chart_figure = Figure(figsize=(8, 3.2))
+        self.asset_house_chart_canvas = FigureCanvas(self.asset_house_chart_figure)
+        house_layout.addWidget(self.asset_house_chart_canvas)
+        detail_layout.addWidget(self.house_panel)
+
+        # Investment inputs.
+        self.investment_panel = QFrame()
+        investment_layout = QVBoxLayout(self.investment_panel)
+        investment_layout.setContentsMargins(0, 0, 0, 0)
+        investment_layout.setSpacing(10)
+        invest_grid = QGridLayout()
+        self.investment_worth_input = QDoubleSpinBox(); self.investment_worth_input.setMaximum(1_000_000_000); self.investment_worth_input.setDecimals(2); self.investment_worth_input.setPrefix("$")
+        self.investment_base_invested_input = QDoubleSpinBox(); self.investment_base_invested_input.setMaximum(1_000_000_000); self.investment_base_invested_input.setDecimals(2); self.investment_base_invested_input.setPrefix("$")
+        invest_grid.addWidget(QLabel("Investment Worth"), 0, 0)
+        invest_grid.addWidget(self.investment_worth_input, 0, 1)
+        invest_grid.addWidget(QLabel("Total Invested (Manual Base)"), 0, 2)
+        invest_grid.addWidget(self.investment_base_invested_input, 0, 3)
+        investment_layout.addLayout(invest_grid)
+
+        valuation_row = QGridLayout()
+        self.investment_valuation_date = QDateEdit(); self.investment_valuation_date.setCalendarPopup(True); self.investment_valuation_date.setDate(QDate.currentDate())
+        self.investment_valuation_value = QDoubleSpinBox(); self.investment_valuation_value.setMaximum(1_000_000_000); self.investment_valuation_value.setDecimals(2); self.investment_valuation_value.setPrefix("$")
+        self.investment_valuation_notes = QLineEdit(); self.investment_valuation_notes.setPlaceholderText("Optional: month-end balance")
+        self.investment_record_value_button = QPushButton("Record Value Snapshot")
+        self.investment_record_value_button.clicked.connect(self._record_investment_value_snapshot)
+        valuation_row.addWidget(QLabel("Valuation Date"), 0, 0)
+        valuation_row.addWidget(self.investment_valuation_date, 0, 1)
+        valuation_row.addWidget(QLabel("Hard Set Current Value"), 0, 2)
+        valuation_row.addWidget(self.investment_valuation_value, 0, 3)
+        valuation_row.addWidget(self.investment_valuation_notes, 1, 0, 1, 3)
+        valuation_row.addWidget(self.investment_record_value_button, 1, 3)
+        investment_layout.addLayout(valuation_row)
+
+        for _w in [self.investment_worth_input, self.investment_base_invested_input]:
+            _w.setEnabled(False)
+        invest_metrics = QGridLayout()
+        self.investment_total_invested_card = MetricCard("Total Invested", "$0.00")
+        self.investment_roi_card = MetricCard("Return On Investment", "0.00%")
+        self.investment_asset_net_worth_card = MetricCard("Asset Net Worth", "$0.00")
+        invest_metrics.addWidget(self.investment_total_invested_card, 0, 0)
+        invest_metrics.addWidget(self.investment_roi_card, 0, 1)
+        invest_metrics.addWidget(self.investment_asset_net_worth_card, 0, 2)
+        investment_layout.addLayout(invest_metrics)
+
+        self.investment_snapshots_table = QTableWidget(0, 3)
+        self.investment_snapshots_table.setHorizontalHeaderLabels(["Date", "Value", "Notes"])
+        self.investment_snapshots_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.investment_snapshots_table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.investment_snapshots_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.investment_snapshots_table.horizontalHeader().setStretchLastSection(True)
+        investment_layout.addWidget(self.investment_snapshots_table)
+        detail_layout.addWidget(self.investment_panel)
+
+        links_panel = QFrame()
+        links_panel.setObjectName("Panel")
+        links_layout = QVBoxLayout(links_panel)
+        links_layout.setContentsMargins(14, 14, 14, 14)
+        links_layout.setSpacing(10)
+        self.asset_linked_expenses_table = QTableWidget(0, 5)
+        self.asset_linked_expenses_table.setHorizontalHeaderLabels(["Source", "Description", "Amount", "Date/Start", "Link ID"])
+        self.asset_linked_expenses_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.asset_linked_expenses_table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.asset_linked_expenses_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.asset_linked_expenses_table.horizontalHeader().setStretchLastSection(True)
+        links_layout.addWidget(self.asset_linked_expenses_table)
+        detail_layout.addWidget(links_panel)
+
+        action_row = QHBoxLayout()
+        self.asset_edit_btn = QPushButton("Edit Details")
+        self.asset_edit_btn.clicked.connect(self._start_asset_edit)
+        self.asset_save_btn = QPushButton("Save Changes")
+        self.asset_save_btn.clicked.connect(self._save_selected_asset_details)
+        self.asset_save_btn.setVisible(False)
+        self.asset_cancel_btn = QPushButton("Cancel Edit")
+        self.asset_cancel_btn.clicked.connect(self._cancel_asset_edit)
+        self.asset_cancel_btn.setVisible(False)
+        asset_delete_btn = QPushButton("Delete Asset")
+        asset_delete_btn.clicked.connect(self._delete_selected_asset)
+        action_row.addWidget(self.asset_edit_btn)
+        action_row.addWidget(self.asset_save_btn)
+        action_row.addWidget(self.asset_cancel_btn)
+        action_row.addWidget(asset_delete_btn)
+        action_row.addStretch(1)
+        detail_layout.addLayout(action_row)
+        scroll_layout.addWidget(self.asset_detail_panel, 1)
+
+    def _add_new_asset_dialog(self) -> None:
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Add New Asset")
+        dialog.setMinimumWidth(480)
+        form = QFormLayout(dialog)
+
+        type_combo = QComboBox(); type_combo.addItems(["house", "investment"])
+        name_input = QLineEdit(); name_input.setPlaceholderText("Asset name")
+
+        # House-specific fields
+        add_house_value = QDoubleSpinBox(); add_house_value.setMaximum(1_000_000_000); add_house_value.setDecimals(2); add_house_value.setPrefix("$")
+        add_principal = QDoubleSpinBox(); add_principal.setMaximum(1_000_000_000); add_principal.setDecimals(2); add_principal.setPrefix("$")
+        add_rate = QDoubleSpinBox(); add_rate.setMaximum(1000); add_rate.setDecimals(3); add_rate.setSuffix("%")
+        add_term_years = QDoubleSpinBox(); add_term_years.setMaximum(100); add_term_years.setDecimals(2); add_term_years.setValue(30)
+        add_loan_start = QDateEdit(); add_loan_start.setCalendarPopup(True); add_loan_start.setDate(QDate.currentDate())
+        escrow_input = QDoubleSpinBox(); escrow_input.setMaximum(1_000_000_000); escrow_input.setDecimals(2); escrow_input.setPrefix("$")
+        add_house_base_total_paid = QDoubleSpinBox(); add_house_base_total_paid.setMaximum(1_000_000_000); add_house_base_total_paid.setDecimals(2); add_house_base_total_paid.setPrefix("$")
+        add_house_base_interest_paid = QDoubleSpinBox(); add_house_base_interest_paid.setMaximum(1_000_000_000); add_house_base_interest_paid.setDecimals(2); add_house_base_interest_paid.setPrefix("$")
+        add_house_base_principal_paid = QDoubleSpinBox(); add_house_base_principal_paid.setMaximum(1_000_000_000); add_house_base_principal_paid.setDecimals(2); add_house_base_principal_paid.setPrefix("$")
+
+        # Investment-specific fields
+        add_invest_worth = QDoubleSpinBox(); add_invest_worth.setMaximum(1_000_000_000); add_invest_worth.setDecimals(2); add_invest_worth.setPrefix("$")
+        add_invest_base = QDoubleSpinBox(); add_invest_base.setMaximum(1_000_000_000); add_invest_base.setDecimals(2); add_invest_base.setPrefix("$")
+
+        form.addRow("Type", type_combo)
+        form.addRow("Name", name_input)
+        form.addRow("House Value", add_house_value)
+        form.addRow("Current Principal", add_principal)
+        form.addRow("Interest Rate", add_rate)
+        form.addRow("Mortgage Term (years)", add_term_years)
+        form.addRow("Loan Start Date", add_loan_start)
+        form.addRow("Escrow Amount", escrow_input)
+        form.addRow("Base Total Paid", add_house_base_total_paid)
+        form.addRow("Base Interest Paid", add_house_base_interest_paid)
+        form.addRow("Base Principal Paid", add_house_base_principal_paid)
+        form.addRow("Investment Worth", add_invest_worth)
+        form.addRow("Total Invested (Base)", add_invest_base)
+
+        btn_row = QHBoxLayout(); add_btn = QPushButton("Add"); cancel_btn = QPushButton("Cancel")
+        btn_row.addWidget(add_btn); btn_row.addWidget(cancel_btn); form.addRow(btn_row)
+
+        _house_widgets = [
+            add_house_value, add_principal, add_rate, add_term_years, add_loan_start,
+            escrow_input, add_house_base_total_paid, add_house_base_interest_paid, add_house_base_principal_paid,
+        ]
+        _invest_widgets = [add_invest_worth, add_invest_base]
+
+        # Collect all QLabel companions so we can hide them together with their fields
+        def _set_form_row_visible(widget: object, visible: bool) -> None:
+            if hasattr(widget, "setVisible"):
+                widget.setVisible(visible)
+            label = form.labelForField(widget)
+            if label:
+                label.setVisible(visible)
+
+        def _toggle_type() -> None:
+            is_house = type_combo.currentText().strip().lower() == "house"
+            for _w in _house_widgets:
+                _set_form_row_visible(_w, is_house)
+            for _w in _invest_widgets:
+                _set_form_row_visible(_w, not is_house)
+
+        type_combo.currentTextChanged.connect(lambda _: _toggle_type())
+        _toggle_type()
+
+        def _save() -> None:
+            name = name_input.text().strip()
+            if not name:
+                QMessageBox.warning(self, APP_NAME, "Please enter an asset name.")
+                return
+            asset_type = type_combo.currentText().strip().lower()
+            is_house = asset_type == "house"
+            asset_id = self.repository.add_asset(
+                name=name,
+                asset_type=asset_type,
+                house_value=add_house_value.value() if is_house else 0.0,
+                current_principal=add_principal.value() if is_house else 0.0,
+                interest_rate_percent=add_rate.value() if is_house else 0.0,
+                total_mortgage_years=add_term_years.value() if is_house else 30.0,
+                loan_start_on=self._qdate_to_date(add_loan_start.date()) if is_house else None,
+                escrow_amount=escrow_input.value() if is_house else 0.0,
+                house_base_total_paid=add_house_base_total_paid.value() if is_house else 0.0,
+                house_base_interest_paid=add_house_base_interest_paid.value() if is_house else 0.0,
+                house_base_principal_paid=add_house_base_principal_paid.value() if is_house else 0.0,
+                investment_worth=add_invest_worth.value() if not is_house else 0.0,
+                base_total_invested=add_invest_base.value() if not is_house else 0.0,
+            )
+            dialog.accept()
+            self.refresh_assets(select_asset_id=asset_id)
+
+        add_btn.clicked.connect(_save)
+        cancel_btn.clicked.connect(dialog.reject)
+        dialog.exec_()
+
+    def _handle_asset_selection_changed(self) -> None:
+        if self._is_refreshing_asset_selector:
+            return
+        asset_id = self.asset_selector_combo.currentData()
+        if asset_id is None:
+            self._selected_asset_id = None
+            self._show_empty_asset_state()
+            return
+
+        self._selected_asset_id = int(asset_id)
+        asset = self.repository.get_asset_by_id(self._selected_asset_id)
+        if asset is None:
+            self._show_empty_asset_state()
+            return
+        self._populate_asset_details(asset)
+        self._refresh_asset_links_views(asset.id)
+
+    def _show_empty_asset_state(self) -> None:
+        self.asset_name_label.setText("No asset selected")
+        self.house_panel.setVisible(False)
+        self.investment_panel.setVisible(False)
+        self.asset_linked_expenses_table.setRowCount(0)
+        if hasattr(self, "house_payment_breakdown_table"):
+            self.house_payment_breakdown_table.setRowCount(0)
+        if hasattr(self, "house_warning_label"):
+            self.house_warning_label.clear()
+            self.house_warning_label.setVisible(False)
+        if hasattr(self, "investment_snapshots_table"):
+            self.investment_snapshots_table.setRowCount(0)
+        if hasattr(self, "asset_tx_link_combo"):
+            self.asset_tx_link_combo.clear()
+        if hasattr(self, "asset_recurring_link_combo"):
+            self.asset_recurring_link_combo.clear()
+
+    def _populate_asset_details(self, asset: Asset) -> None:
+        self.asset_name_label.setText(f"{asset.name} ({asset.asset_type.title()})")
+        is_house = asset.asset_type == "house"
+        self.house_panel.setVisible(is_house)
+        self.investment_panel.setVisible(not is_house)
+
+        self.house_value_input.setValue(asset.house_value)
+        self.house_principal_input.setValue(asset.current_principal)
+        self.house_rate_input.setValue(asset.interest_rate_percent)
+        self.house_term_years_input.setValue(asset.total_mortgage_years)
+        self.house_escrow_input.setValue(asset.escrow_amount)
+        self.house_base_total_paid_input.setValue(asset.house_base_total_paid)
+        self.house_base_interest_paid_input.setValue(asset.house_base_interest_paid)
+        self.house_base_principal_paid_input.setValue(asset.house_base_principal_paid)
+        if asset.loan_start_on:
+            self.house_loan_start_input.setDate(QDate(asset.loan_start_on.year, asset.loan_start_on.month, asset.loan_start_on.day))
+
+        self.investment_worth_input.setValue(asset.investment_worth)
+        self.investment_base_invested_input.setValue(asset.base_total_invested)
+
+        payment_events = self._build_asset_payment_events(asset)
+        if is_house:
+            breakdown = self._calculate_house_breakdown(asset, payment_events)
+            self._set_metric_value(self.house_total_paid_card, breakdown["total_paid"])
+            self._set_metric_value(self.house_total_principal_paid_card, breakdown["principal_paid"])
+            self._set_metric_value(self.house_total_interest_paid_card, breakdown["interest_paid"])
+            self._set_metric_value(self.house_total_escrow_paid_card, breakdown["escrow_paid"])
+            self._set_metric_value(self.house_total_housing_cost_card, breakdown["housing_cost"])
+            self.house_years_elapsed_card.set_value(f"{breakdown['years_elapsed']:.2f}")
+            if breakdown["years_left"] is None:
+                self.house_years_left_card.set_value("N/A", is_warning=True)
+            else:
+                self.house_years_left_card.set_value(f"{breakdown['years_left']:.2f}")
+            self._set_metric_value(self.house_asset_net_worth_card, asset.house_value - asset.current_principal)
+            self._draw_house_payment_chart(breakdown["points"])
+            self._populate_house_payment_breakdown_table(breakdown["rows"])
+            warnings = breakdown["warnings"]
+            if warnings:
+                self.house_warning_label.setText(" | ".join(warnings))
+                self.house_warning_label.setVisible(True)
+            else:
+                self.house_warning_label.clear()
+                self.house_warning_label.setVisible(False)
+        else:
+            linked_contributions = sum(float(event["amount"]) for event in payment_events)
+            total_invested = asset.base_total_invested + linked_contributions
+            current_worth = asset.investment_worth
+            roi_percent = ((current_worth - total_invested) / total_invested * 100.0) if total_invested > 0 else 0.0
+            self._set_metric_value(self.investment_total_invested_card, total_invested)
+            self.investment_roi_card.set_value(f"{roi_percent:,.2f}%", is_warning=roi_percent < 0)
+            self._set_metric_value(self.investment_asset_net_worth_card, current_worth)
+            self.investment_valuation_value.setValue(current_worth)
+            self._refresh_investment_snapshots(asset.id)
+            self.house_warning_label.clear()
+            self.house_warning_label.setVisible(False)
+        # Always return to locked (read-only) view after populating
+        self._set_asset_inputs_enabled(False)
+
+    def _save_selected_asset_details(self) -> None:
+        if self._selected_asset_id is None:
+            return
+        asset = self.repository.get_asset_by_id(self._selected_asset_id)
+        if asset is None:
+            return
+
+        updated = self.repository.update_asset(
+            asset_id=self._selected_asset_id,
+            name=asset.name,
+            asset_type=asset.asset_type,
+            house_value=self.house_value_input.value(),
+            current_principal=self.house_principal_input.value(),
+            interest_rate_percent=self.house_rate_input.value(),
+            total_mortgage_years=self.house_term_years_input.value(),
+            loan_start_on=self._qdate_to_date(self.house_loan_start_input.date()),
+            escrow_amount=self.house_escrow_input.value(),
+            house_base_total_paid=self.house_base_total_paid_input.value(),
+            house_base_interest_paid=self.house_base_interest_paid_input.value(),
+            house_base_principal_paid=self.house_base_principal_paid_input.value(),
+            investment_worth=self.investment_worth_input.value(),
+            base_total_invested=self.investment_base_invested_input.value(),
+            notes=asset.notes,
+        )
+        if updated:
+            self.refresh_assets(select_asset_id=self._selected_asset_id)
+        # Lock inputs after save regardless of outcome
+        self._set_asset_inputs_enabled(False)
+
+    def _start_asset_edit(self) -> None:
+        self._set_asset_inputs_enabled(True)
+
+    def _cancel_asset_edit(self) -> None:
+        if self._selected_asset_id is not None:
+            asset = self.repository.get_asset_by_id(self._selected_asset_id)
+            if asset:
+                self._populate_asset_details(asset)
+                return
+        self._set_asset_inputs_enabled(False)
+
+    def _set_asset_inputs_enabled(self, enabled: bool) -> None:
+        """Enable or disable all asset detail inputs and toggle edit/save/cancel button visibility."""
+        house_inputs = [
+            self.house_value_input, self.house_principal_input, self.house_rate_input,
+            self.house_term_years_input, self.house_loan_start_input, self.house_escrow_input,
+            self.house_base_total_paid_input, self.house_base_interest_paid_input,
+            self.house_base_principal_paid_input,
+        ]
+        invest_inputs = [self.investment_worth_input, self.investment_base_invested_input]
+        for _w in house_inputs + invest_inputs:
+            _w.setEnabled(enabled)
+        if hasattr(self, "asset_edit_btn"):
+            self.asset_edit_btn.setVisible(not enabled)
+            self.asset_save_btn.setVisible(enabled)
+            self.asset_cancel_btn.setVisible(enabled)
+
+    def _delete_selected_asset(self) -> None:
+        if self._selected_asset_id is None:
+            return
+        if self.repository.delete_asset(self._selected_asset_id):
+            self._selected_asset_id = None
+            self.refresh_assets()
+
+    def _record_investment_value_snapshot(self) -> None:
+        if self._selected_asset_id is None:
+            return
+        asset = self.repository.get_asset_by_id(self._selected_asset_id)
+        if asset is None or asset.asset_type != "investment":
+            return
+
+        value = self.investment_valuation_value.value()
+        if value < 0:
+            QMessageBox.warning(self, APP_NAME, "Current value must be zero or greater.")
+            return
+
+        saved = self.repository.record_investment_value_snapshot(
+            asset_id=int(self._selected_asset_id),
+            value=value,
+            valued_on=self._qdate_to_date(self.investment_valuation_date.date()),
+            notes=self.investment_valuation_notes.text(),
+        )
+        if not saved:
+            QMessageBox.warning(self, APP_NAME, "Could not save investment value snapshot.")
+            return
+
+        self.investment_valuation_notes.clear()
+        self.status_bar.showMessage("Saved investment value snapshot and updated current value.", 4000)
+        self.refresh_assets(select_asset_id=self._selected_asset_id)
+
+    def _refresh_investment_snapshots(self, asset_id: int | None) -> None:
+        if asset_id is None:
+            self.investment_snapshots_table.setRowCount(0)
+            return
+
+        snapshots = self.repository.list_asset_value_snapshots(int(asset_id), limit=24)
+        self.investment_snapshots_table.setRowCount(len(snapshots))
+        for row_index, snapshot in enumerate(snapshots):
+            cells = [
+                snapshot["valued_on"].isoformat(),
+                f"${float(snapshot['value']):,.2f}",
+                str(snapshot["notes"]),
+            ]
+            for column_index, text in enumerate(cells):
+                item = QTableWidgetItem(text)
+                if column_index == 1:
+                    item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                self.investment_snapshots_table.setItem(row_index, column_index, item)
+
+    def _refresh_asset_links_views(self, asset_id: int | None) -> None:
+        if asset_id is None:
+            self.asset_linked_expenses_table.setRowCount(0)
+            if hasattr(self, "asset_tx_link_combo"):
+                self.asset_tx_link_combo.clear()
+            if hasattr(self, "asset_recurring_link_combo"):
+                self.asset_recurring_link_combo.clear()
+            return
+
+        links = self.repository.list_asset_expense_links(asset_id)
+        self.asset_linked_expenses_table.setRowCount(len(links))
+        for row_index, link in enumerate(links):
+            source_label = "One-Time" if link["source_type"] == "transaction" else "Recurring"
+            payment_kind = str(link.get("payment_kind", "mortgage")).title()
+            date_value = link["date"]
+            date_label = date_value.isoformat() if isinstance(date_value, date) else "-"
+            cells = [f"{source_label} ({payment_kind})", str(link["label"]), f"${float(link['amount']):,.2f}", date_label, str(link["link_id"])]
+            for column_index, text in enumerate(cells):
+                item = QTableWidgetItem(text)
+                if column_index == 2:
+                    item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                if column_index == 4:
+                    item.setData(Qt.UserRole, int(link["link_id"]))
+                self.asset_linked_expenses_table.setItem(row_index, column_index, item)
+
+        if hasattr(self, "asset_tx_link_combo"):
+            self.asset_tx_link_combo.clear()
+            for transaction in self.repository.list_unlinked_expense_transactions(limit=300):
+                label = f"{transaction.occurred_on.isoformat()} | {transaction.category} | {transaction.description} | ${transaction.amount:,.2f}"
+                self.asset_tx_link_combo.addItem(label, int(transaction.id))
+
+        if hasattr(self, "asset_recurring_link_combo"):
+            self.asset_recurring_link_combo.clear()
+            for recurring_item in self.repository.list_unlinked_recurring_expenses():
+                label = f"{recurring_item.category} | {recurring_item.description} | ${recurring_item.amount:,.2f}"
+                self.asset_recurring_link_combo.addItem(label, int(recurring_item.id))
+
+    def _link_selected_transaction_expense(self) -> None:
+        if self._selected_asset_id is None:
+            return
+        tx_id = self.asset_tx_link_combo.currentData()
+        if tx_id is None:
+            return
+        try:
+            self.repository.link_expense_to_asset(self._selected_asset_id, "transaction", int(tx_id))
+            self.refresh_assets(select_asset_id=self._selected_asset_id)
+        except Exception:
+            QMessageBox.warning(self, APP_NAME, "Could not link selected one-time expense.")
+
+    def _link_selected_recurring_expense(self) -> None:
+        if self._selected_asset_id is None:
+            return
+        recurring_id = self.asset_recurring_link_combo.currentData()
+        if recurring_id is None:
+            return
+        try:
+            self.repository.link_expense_to_asset(self._selected_asset_id, "recurring", int(recurring_id))
+            self.refresh_assets(select_asset_id=self._selected_asset_id)
+        except Exception:
+            QMessageBox.warning(self, APP_NAME, "Could not link selected recurring expense.")
+
+    def _unlink_selected_asset_expense(self) -> None:
+        row = self.asset_linked_expenses_table.currentRow()
+        if row < 0:
+            return
+        link_item = self.asset_linked_expenses_table.item(row, 4)
+        if link_item is None:
+            return
+        link_id = int(link_item.data(Qt.UserRole))
+        self.repository.unlink_expense_from_asset(link_id)
+        self.refresh_assets(select_asset_id=self._selected_asset_id)
+
+    def _build_asset_payment_events(self, asset: Asset) -> list[dict[str, object]]:
+        if asset.id is None:
+            return []
+        links = self.repository.list_asset_expense_links(asset.id)
+        events: list[dict[str, object]] = []
+        for link in links:
+            amount = float(link["amount"])
+            source_date = link["date"]
+            payment_kind = str(link.get("payment_kind", "mortgage"))
+            if not isinstance(source_date, date):
+                continue
+            events.append(
+                {
+                    "date": source_date,
+                    "amount": amount,
+                    "payment_kind": payment_kind,
+                    "source_type": str(link["source_type"]),
+                    "label": str(link["label"]),
+                }
+            )
+        events.sort(key=lambda item: item["date"])
+        return events
+
+    def _calculate_house_breakdown(self, asset: Asset, payment_events: list[dict[str, object]]) -> dict[str, object]:
+        annual_rate = max(asset.interest_rate_percent, 0.0) / 100.0
+        monthly_rate = annual_rate / 12.0
+        total_paid = max(asset.house_base_total_paid, 0.0)
+        principal_paid = max(asset.house_base_principal_paid, 0.0)
+        interest_paid = max(asset.house_base_interest_paid, 0.0)
+        escrow_paid = 0.0
+        warnings: list[str] = []
+        points: list[tuple[date, float, float, float]] = []
+        rows: list[dict[str, object]] = []
+
+        if asset.house_base_interest_paid + asset.house_base_principal_paid > asset.house_base_total_paid + 0.01:
+            warnings.append("Base principal + interest exceeds base total paid.")
+
+        starting_balance = self._estimate_opening_principal(asset, payment_events)
+        balance = starting_balance
+
+        if total_paid > 0 or principal_paid > 0 or interest_paid > 0:
+            baseline_date = (asset.loan_start_on or date.today())
+            points.append((baseline_date, total_paid, principal_paid, interest_paid))
+
+        previous_date = asset.loan_start_on or (payment_events[0]["date"] if payment_events else date.today())
+        escrow_per_payment = max(asset.escrow_amount, 0.0)
+        for event in payment_events:
+            payment_date = event["date"]
+            amount = float(event["amount"])
+            payment_kind = str(event["payment_kind"])
+            months_elapsed = self._months_between(previous_date, payment_date)
+            accrued_interest = balance * monthly_rate * months_elapsed
+            escrow_component = min(amount, escrow_per_payment) if payment_kind == "mortgage" else 0.0
+            mortgage_payment = amount if payment_kind == "principal" else max(amount - escrow_component, 0.0)
+            if payment_kind == "principal":
+                interest_component = 0.0
+                principal_component = max(0.0, min(balance, mortgage_payment))
+            else:
+                interest_component = min(mortgage_payment, accrued_interest)
+                principal_component = max(0.0, min(balance, mortgage_payment - interest_component))
+            balance = max(0.0, balance - principal_component)
+
+            total_paid += amount
+            principal_paid += principal_component
+            interest_paid += interest_component
+            escrow_paid += escrow_component
+            points.append((payment_date, total_paid, principal_paid, interest_paid))
+            rows.append(
+                {
+                    "date": payment_date,
+                    "source": "One-Time" if str(event["source_type"]) == "transaction" else "Recurring",
+                    "payment_type": payment_kind,
+                    "gross_payment": amount,
+                    "escrow": escrow_component,
+                    "mortgage_net": mortgage_payment,
+                    "interest": interest_component,
+                    "principal": principal_component,
+                    "running_principal": balance,
+                    "running_total_paid": total_paid,
+                }
+            )
+            previous_date = payment_date
+
+        if payment_events and asset.loan_start_on is None:
+            warnings.append("Loan start date is missing. Add it to improve elapsed-year and interest timing accuracy.")
+        if payment_events and max(asset.current_principal, 0.0) <= 0:
+            warnings.append("Current principal is zero while payments are linked. Verify payoff status and payment links.")
+        if any(row["mortgage_net"] <= 0 and row["payment_type"] == "mortgage" for row in rows):
+            warnings.append("One or more mortgage payments are fully consumed by escrow. Verify escrow amount.")
+
+        loan_start = asset.loan_start_on or date.today()
+        years_elapsed = max(0.0, (date.today() - loan_start).days / 365.25)
+        monthly_payment = self._estimate_monthly_mortgage_payment(payment_events, asset)
+        years_left = self._calculate_mortgage_years_left(
+            current_principal=max(asset.current_principal, 0.0),
+            annual_interest_rate_percent=max(asset.interest_rate_percent, 0.0),
+            monthly_payment=monthly_payment,
+        )
+        if years_left is None:
+            warnings.append("Monthly mortgage payment does not cover interest. Years left cannot be estimated.")
+
+        housing_cost = principal_paid + interest_paid + escrow_paid
+        return {
+            "total_paid": total_paid,
+            "principal_paid": principal_paid,
+            "interest_paid": interest_paid,
+            "escrow_paid": escrow_paid,
+            "housing_cost": housing_cost,
+            "years_elapsed": years_elapsed,
+            "years_left": years_left,
+            "points": points,
+            "rows": rows,
+            "warnings": warnings,
+        }
+
+    def _estimate_opening_principal(self, asset: Asset, payment_events: list[dict[str, object]]) -> float:
+        """Reverse-linked payment events to estimate principal at tracking start."""
+        if not payment_events:
+            return max(asset.current_principal, 0.0)
+
+        monthly_rate = max(asset.interest_rate_percent, 0.0) / 100.0 / 12.0
+        escrow_per_payment = max(asset.escrow_amount, 0.0)
+        end_balance = max(asset.current_principal, 0.0)
+
+        indexed_events = list(enumerate(payment_events))
+        reverse_events = sorted(indexed_events, key=lambda pair: pair[1]["date"], reverse=True)
+        first_date = payment_events[0]["date"]
+
+        for index, event in reverse_events:
+            event_date = event["date"]
+            payment_kind = str(event["payment_kind"])
+            amount = float(event["amount"])
+            prior_date = asset.loan_start_on if index == 0 else payment_events[index - 1]["date"]
+            if prior_date is None:
+                prior_date = first_date
+            months_elapsed = self._months_between(prior_date, event_date)
+            factor = 1.0 + (monthly_rate * months_elapsed)
+
+            if payment_kind == "principal":
+                end_balance = end_balance + max(amount, 0.0)
+                continue
+
+            net_payment = max(amount - min(amount, escrow_per_payment), 0.0)
+            if factor <= 0:
+                end_balance = end_balance + net_payment
+                continue
+
+            candidate_start = (end_balance + net_payment) / factor
+            interest_only_threshold = candidate_start * (monthly_rate * months_elapsed)
+            if net_payment <= interest_only_threshold + 1e-9:
+                start_balance = end_balance
+            else:
+                start_balance = max(end_balance, candidate_start)
+            end_balance = start_balance
+
+        return max(end_balance, 0.0)
+
+    def _estimate_monthly_mortgage_payment(self, payment_events: list[dict[str, object]], asset: Asset) -> float:
+        """Estimate monthly payment using linked events; fallback to amortized term estimate."""
+        if payment_events:
+            start_of_this_month = date.today().replace(day=1)
+            one_year_ago = self._advance_months(start_of_this_month, -12)
+            monthly_totals: dict[tuple[int, int], float] = {}
+            for event in payment_events:
+                payment_date = event["date"]
+                amount = float(event["amount"])
+                payment_kind = str(event["payment_kind"])
+                if payment_kind != "mortgage" or payment_date < one_year_ago:
+                    continue
+                key = (payment_date.year, payment_date.month)
+                monthly_totals[key] = monthly_totals.get(key, 0.0) + max(amount - max(asset.escrow_amount, 0.0), 0.0)
+            if monthly_totals:
+                return sum(monthly_totals.values()) / len(monthly_totals)
+
+        principal = max(asset.current_principal, 0.0)
+        annual_rate = max(asset.interest_rate_percent, 0.0) / 100.0
+        total_months = max(int(round(max(asset.total_mortgage_years, 0.0) * 12)), 1)
+        if principal <= 0:
+            return 0.0
+        if annual_rate <= 0:
+            return principal / total_months
+
+        monthly_rate = annual_rate / 12.0
+        growth = (1 + monthly_rate) ** total_months
+        return principal * (monthly_rate * growth) / (growth - 1)
+
+    def _calculate_mortgage_years_left(
+        self,
+        current_principal: float,
+        annual_interest_rate_percent: float,
+        monthly_payment: float,
+    ) -> float | None:
+        if current_principal <= 0:
+            return 0.0
+        if monthly_payment <= 0:
+            return None
+
+        monthly_rate = (annual_interest_rate_percent / 100.0) / 12.0
+        if monthly_rate <= 0:
+            return current_principal / monthly_payment / 12.0
+
+        # Payment must exceed monthly interest to amortize.
+        min_interest_payment = current_principal * monthly_rate
+        if monthly_payment <= min_interest_payment:
+            return None
+
+        months_left = -math.log(1 - (monthly_rate * current_principal / monthly_payment)) / math.log(1 + monthly_rate)
+        return max(0.0, months_left / 12.0)
+
+    def _months_between(self, earlier: date, later: date) -> int:
+        if later <= earlier:
+            return 0
+        return max(0, (later.year - earlier.year) * 12 + (later.month - earlier.month))
+
+    def _populate_house_payment_breakdown_table(self, rows: list[dict[str, object]]) -> None:
+        self.house_payment_breakdown_table.setRowCount(len(rows))
+        for row_index, row in enumerate(rows):
+            cells = [
+                str(row["date"].isoformat()),
+                str(row["source"]),
+                str(row["payment_type"]).title(),
+                f"${float(row['gross_payment']):,.2f}",
+                f"${float(row['escrow']):,.2f}",
+                f"${float(row['mortgage_net']):,.2f}",
+                f"${float(row['interest']):,.2f}",
+                f"${float(row['principal']):,.2f}",
+                f"${float(row['running_principal']):,.2f}",
+                f"${float(row['running_total_paid']):,.2f}",
+            ]
+            for column_index, text in enumerate(cells):
+                item = QTableWidgetItem(text)
+                if column_index >= 3:
+                    item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                self.house_payment_breakdown_table.setItem(row_index, column_index, item)
+
+    def _draw_house_payment_chart(self, points: list[tuple[date, float, float, float]]) -> None:
+        self.asset_house_chart_figure.clear()
+        axis = self.asset_house_chart_figure.add_subplot(111)
+        self._style_chart_axis(axis)
+        if not points:
+            axis.text(0.5, 0.5, "Link expenses to view payment history.", color="#e7edf7", ha="center", va="center")
+            axis.set_title("Mortgage Payment Breakdown", color="#f5f8ff")
+            self.asset_house_chart_figure.tight_layout()
+            self.asset_house_chart_canvas.draw_idle()
+            return
+
+        labels = [entry[0].isoformat() for entry in points]
+        total_paid = [entry[1] for entry in points]
+        principal_paid = [entry[2] for entry in points]
+        interest_paid = [entry[3] for entry in points]
+        axis.plot(labels, total_paid, color="#2ec4b6", linewidth=2.0, label="Total Paid")
+        axis.plot(labels, principal_paid, color="#4cc9f0", linewidth=2.0, label="Principal Paid")
+        axis.plot(labels, interest_paid, color="#ff7b72", linewidth=2.0, label="Interest Paid")
+        axis.tick_params(axis="x", rotation=20)
+        axis.set_title("Mortgage Payment Breakdown", color="#f5f8ff")
+        axis.legend(facecolor="#111a27", edgecolor="#233247", labelcolor="#e7edf7")
+        self.asset_house_chart_figure.tight_layout()
+        self.asset_house_chart_canvas.draw_idle()
+
+    def _advance_months(self, value: date, interval_count: int) -> date:
+        month_index = value.month - 1 + int(interval_count)
+        year = value.year + month_index // 12
+        month = month_index % 12 + 1
+        day = min(value.day, calendar.monthrange(year, month)[1])
+        return date(year, month, day)
+
+    def refresh_assets(self, select_asset_id: int | None = None) -> None:
+        overview = self.repository.assets_overview()
+        self._set_metric_value(self.assets_total_net_worth_card, overview["total_net_worth"], is_warning=overview["total_net_worth"] < 0)
+        self._set_metric_value(self.assets_total_value_card, overview["total_value"])
+        self._set_metric_value(self.assets_total_debt_card, overview["total_debt"])
+        self._set_metric_value(self.assets_total_invested_card, overview["total_invested"])
+
+        assets = self.repository.list_assets()
+        self._is_refreshing_asset_selector = True
+        self.asset_selector_combo.clear()
+        for asset in assets:
+            self.asset_selector_combo.addItem(f"{asset.name} ({asset.asset_type.title()})", int(asset.id))
+        self._is_refreshing_asset_selector = False
+
+        if self.asset_selector_combo.count() == 0:
+            self._selected_asset_id = None
+            self._show_empty_asset_state()
+            return
+
+        target_asset_id = select_asset_id if select_asset_id is not None else self._selected_asset_id
+        target_index = 0
+        if target_asset_id is not None:
+            found_index = self.asset_selector_combo.findData(int(target_asset_id))
+            if found_index >= 0:
+                target_index = found_index
+
+        self.asset_selector_combo.setCurrentIndex(target_index)
+        self._handle_asset_selection_changed()
+        self._refresh_asset_link_entry_controls()
+
+    def _refresh_asset_link_entry_controls(self) -> None:
+        assets = self.repository.list_assets()
+
+        if hasattr(self, "expense_asset_link_combo"):
+            previous_data = self.expense_asset_link_combo.currentData() if self.expense_asset_link_combo.count() > 0 else None
+            self.expense_asset_link_combo.blockSignals(True)
+            self.expense_asset_link_combo.clear()
+            self.expense_asset_link_combo.addItem("No asset link", None)
+            for asset in assets:
+                self.expense_asset_link_combo.addItem(f"{asset.name} ({asset.asset_type.title()})", int(asset.id))
+            restore_index = self.expense_asset_link_combo.findData(previous_data)
+            self.expense_asset_link_combo.setCurrentIndex(restore_index if restore_index >= 0 else 0)
+            self.expense_asset_link_combo.blockSignals(False)
+
+        if hasattr(self, "recurring_asset_link_combo"):
+            previous_data = self.recurring_asset_link_combo.currentData() if self.recurring_asset_link_combo.count() > 0 else None
+            self.recurring_asset_link_combo.blockSignals(True)
+            self.recurring_asset_link_combo.clear()
+            self.recurring_asset_link_combo.addItem("No asset link", None)
+            for asset in assets:
+                self.recurring_asset_link_combo.addItem(f"{asset.name} ({asset.asset_type.title()})", int(asset.id))
+            restore_index = self.recurring_asset_link_combo.findData(previous_data)
+            self.recurring_asset_link_combo.setCurrentIndex(restore_index if restore_index >= 0 else 0)
+            self.recurring_asset_link_combo.blockSignals(False)
+
     def _build_assistant_tab(self) -> None:
         layout = QVBoxLayout(self.assistant_tab)
         layout.setContentsMargins(24, 24, 24, 24)
@@ -1154,7 +2094,7 @@ class MainWindow(QMainWindow):
         self.model_selector = QComboBox()
         self.model_selector.currentTextChanged.connect(self._handle_model_changed)
         self._refresh_available_models()
-        refresh_models_btn = QPushButton("↻ Refresh Models")
+        refresh_models_btn = QPushButton("Γå╗ Refresh Models")
         refresh_models_btn.setMaximumWidth(120)
         refresh_models_btn.clicked.connect(self._refresh_available_models)
         model_selector_row.addWidget(model_label)
@@ -1225,9 +2165,9 @@ class MainWindow(QMainWindow):
             self,
             "Import CSV data",
             "How do you want to import?\n\n"
-            "• Yes  — clear all existing data first, then import (full reset)\n"
-            "• No   — add imported data on top of existing data\n"
-            "• Cancel — abort",
+            "ΓÇó Yes  ΓÇö clear all existing data first, then import (full reset)\n"
+            "ΓÇó No   ΓÇö add imported data on top of existing data\n"
+            "ΓÇó Cancel ΓÇö abort",
             QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel,
             QMessageBox.Cancel,
         )
@@ -1416,6 +2356,7 @@ class MainWindow(QMainWindow):
         self.refresh_recurring_table()
         self.refresh_charts()
         self.refresh_budget()
+        self.refresh_assets()
 
     def _populate_period_selectors(self, month_combo: QComboBox, year_combo: QComboBox) -> None:
         month_combo.clear()
@@ -1477,6 +2418,12 @@ class MainWindow(QMainWindow):
                 self.recurring_category.setCurrentIndex(index)
             else:
                 self.recurring_category.setCurrentIndex(0)
+
+        is_expense = current_kind == "expense"
+        if hasattr(self, "recurring_asset_link_combo"):
+            self.recurring_asset_link_combo.setEnabled(is_expense)
+        if hasattr(self, "recurring_asset_payment_kind_combo"):
+            self.recurring_asset_payment_kind_combo.setEnabled(is_expense)
 
     def refresh_dashboard(self) -> None:
         snapshot = self.repository.snapshot_for_month(self._selected_year, self._selected_month)
@@ -1650,6 +2597,7 @@ class MainWindow(QMainWindow):
             category=self.expense_category.currentText(),
             description=self.expense_description.text(),
             occurred_on=self.expense_date.date(),
+            payment_kind=self.expense_asset_payment_kind_combo.currentData(),
         )
 
     def add_income(self) -> None:
@@ -1678,7 +2626,7 @@ class MainWindow(QMainWindow):
             return
 
         start_on = self._qdate_to_date(self.recurring_start_date.date())
-        self.repository.add_recurring_item(
+        recurring_id = self.repository.add_recurring_item(
             kind=self.recurring_kind.currentText(),
             amount=amount,
             category=category,
@@ -1688,10 +2636,25 @@ class MainWindow(QMainWindow):
             start_on=start_on,
         )
 
+        if self.recurring_kind.currentText() == "expense":
+            selected_asset_id = self.recurring_asset_link_combo.currentData()
+            if selected_asset_id is not None:
+                try:
+                    self.repository.link_expense_to_asset(
+                        int(selected_asset_id),
+                        "recurring",
+                        recurring_id,
+                        payment_kind=str(self.recurring_asset_payment_kind_combo.currentData() or "mortgage"),
+                    )
+                except Exception:
+                    QMessageBox.warning(self, APP_NAME, "Recurring item was saved, but could not be linked to the selected asset.")
+
         self.status_bar.showMessage("Saved recurring item.", 4000)
         self.refresh_all()
         self.recurring_amount.setValue(0.0)
         self.recurring_description.clear()
+        self.recurring_asset_link_combo.setCurrentIndex(0)
+        self.recurring_asset_payment_kind_combo.setCurrentIndex(0)
 
     def edit_selected_recurring(self) -> None:
         """Open edit dialog for selected recurring item."""
@@ -1765,6 +2728,41 @@ class MainWindow(QMainWindow):
         active_check.setChecked(recurring_item.is_active)
         layout.addRow("Active", active_check)
 
+        # Optional asset link for recurring expenses
+        edit_asset_link_combo = QComboBox()
+        edit_asset_link_combo.addItem("No asset link", None)
+        for asset in self.repository.list_assets():
+            edit_asset_link_combo.addItem(f"{asset.name} ({asset.asset_type.title()})", int(asset.id))
+        current_link = self.repository.get_expense_asset_link("recurring", recurring_id)
+        current_asset_id = current_link["asset_id"] if current_link else None
+        current_payment_kind = str(current_link["payment_kind"] if current_link else "mortgage")
+        current_asset_index = edit_asset_link_combo.findData(current_asset_id)
+        edit_asset_link_combo.setCurrentIndex(current_asset_index if current_asset_index >= 0 else 0)
+        edit_asset_link_combo.setEnabled(recurring_item.kind == "expense")
+        layout.addRow("Link To Asset", edit_asset_link_combo)
+
+        edit_payment_kind_combo = QComboBox()
+        edit_payment_kind_combo.addItem("Mortgage", "mortgage")
+        edit_payment_kind_combo.addItem("Principal", "principal")
+        payment_index = edit_payment_kind_combo.findData(current_payment_kind)
+        edit_payment_kind_combo.setCurrentIndex(payment_index if payment_index >= 0 else 0)
+        edit_payment_kind_combo.setEnabled(recurring_item.kind == "expense")
+        layout.addRow("Apply As", edit_payment_kind_combo)
+
+        def on_kind_changed(new_kind: str) -> None:
+            categories_local = self.repository.list_categories(kind=new_kind)
+            category_combo.clear()
+            for category in categories_local:
+                category_combo.addItem(category.name, category.name)
+            if recurring_item.kind == new_kind:
+                category_combo.setCurrentText(recurring_item.category)
+            elif category_combo.count() > 0:
+                category_combo.setCurrentIndex(0)
+            edit_asset_link_combo.setEnabled(new_kind == "expense")
+            edit_payment_kind_combo.setEnabled(new_kind == "expense")
+
+        kind_combo.currentTextChanged.connect(on_kind_changed)
+
         # Buttons
         button_layout = QHBoxLayout()
         save_button = QPushButton("Save Changes")
@@ -1798,6 +2796,19 @@ class MainWindow(QMainWindow):
             )
 
             if success:
+                try:
+                    if new_kind == "expense":
+                        self.repository.set_expense_asset_link(
+                            edit_asset_link_combo.currentData(),
+                            "recurring",
+                            recurring_id,
+                            payment_kind=str(edit_payment_kind_combo.currentData() or "mortgage"),
+                        )
+                    else:
+                        self.repository.set_expense_asset_link(None, "recurring", recurring_id)
+                except Exception:
+                    QMessageBox.warning(self, APP_NAME, "Recurring item was updated, but the asset link could not be updated.")
+
                 # If category changed, recategorize existing transactions from this recurring item
                 if new_category != recurring_item.category:
                     self.repository.change_transaction_category(
@@ -1853,7 +2864,15 @@ class MainWindow(QMainWindow):
     def _qdate_to_date(self, value: QDate) -> date:
         return date(value.year(), value.month(), value.day())
 
-    def _add_transaction(self, kind: str, amount: float, category: str, description: str, occurred_on: QDate) -> None:
+    def _add_transaction(
+        self,
+        kind: str,
+        amount: float,
+        category: str,
+        description: str,
+        occurred_on: QDate,
+        payment_kind: object | None = None,
+    ) -> None:
         if amount <= 0:
             QMessageBox.warning(self, APP_NAME, "Enter an amount greater than zero.")
             return
@@ -1863,7 +2882,18 @@ class MainWindow(QMainWindow):
 
         transaction_date = self._qdate_to_date(occurred_on)
         if kind == "expense":
-            self.repository.add_expense(amount, category, description, transaction_date)
+            transaction_id = self.repository.add_expense(amount, category, description, transaction_date)
+            selected_asset_id = self.expense_asset_link_combo.currentData()
+            if selected_asset_id is not None:
+                try:
+                    self.repository.link_expense_to_asset(
+                        int(selected_asset_id),
+                        "transaction",
+                        transaction_id,
+                        payment_kind=str(payment_kind or self.expense_asset_payment_kind_combo.currentData() or "mortgage"),
+                    )
+                except Exception:
+                    QMessageBox.warning(self, APP_NAME, "Expense was saved, but could not be linked to the selected asset.")
         else:
             self.repository.add_income(amount, category, description, transaction_date)
 
@@ -1875,6 +2905,8 @@ class MainWindow(QMainWindow):
         if kind == "expense":
             self.expense_amount.setValue(0.0)
             self.expense_description.clear()
+            self.expense_asset_link_combo.setCurrentIndex(0)
+            self.expense_asset_payment_kind_combo.setCurrentIndex(0)
         else:
             self.income_amount.setValue(0.0)
             self.income_description.clear()
@@ -2185,10 +3217,10 @@ class MainWindow(QMainWindow):
                 continue
 
             # Bullet list support
-            if re.match(r"^\s*[-*•]\s+", line):
+            if re.match(r"^\s*[-*ΓÇó]\s+", line):
                 bullet_lines: list[str] = []
-                while i < len(lines) and re.match(r"^\s*[-*•]\s+", lines[i]):
-                    item_text = re.sub(r"^\s*[-*•]\s+", "", lines[i].strip())
+                while i < len(lines) and re.match(r"^\s*[-*ΓÇó]\s+", lines[i]):
+                    item_text = re.sub(r"^\s*[-*ΓÇó]\s+", "", lines[i].strip())
                     bullet_lines.append(item_text)
                     i += 1
 
