@@ -271,8 +271,11 @@ class MainWindow(QMainWindow):
         splitter = QSplitter(Qt.Horizontal)
         splitter.addWidget(self._build_quick_entry_panel())
         splitter.addWidget(self._build_recent_activity_panel())
+        splitter.setChildrenCollapsible(False)
+        splitter.setHandleWidth(10)
         splitter.setStretchFactor(0, 1)
         splitter.setStretchFactor(1, 2)
+        splitter.setSizes([420, 760])
         layout.addWidget(splitter, 1)
 
         dashboard_actions = QHBoxLayout()
@@ -621,7 +624,7 @@ class MainWindow(QMainWindow):
         # Goal savings input section
         goal_panel = QFrame()
         goal_panel.setObjectName("Panel")
-        goal_layout = QHBoxLayout(goal_panel)
+        goal_layout = QGridLayout(goal_panel)
         goal_layout.setContentsMargins(18, 18, 18, 18)
         goal_layout.setSpacing(12)
 
@@ -637,10 +640,10 @@ class MainWindow(QMainWindow):
         self.budget_goal_status_label.setObjectName("PageSubtitle")
         self.budget_goal_status_label.setProperty("tone", "muted")
 
-        goal_layout.addWidget(goal_label)
-        goal_layout.addWidget(self.savings_goal_input)
-        goal_layout.addWidget(self.budget_goal_status_label)
-        goal_layout.addStretch(1)
+        goal_layout.addWidget(goal_label, 0, 0)
+        goal_layout.addWidget(self.savings_goal_input, 0, 1)
+        goal_layout.addWidget(self.budget_goal_status_label, 1, 0, 1, 3)
+        goal_layout.setColumnStretch(2, 1)
         goal_panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         layout.addWidget(goal_panel)
 
@@ -664,14 +667,16 @@ class MainWindow(QMainWindow):
         self.budget_table.setSelectionMode(QAbstractItemView.SingleSelection)
         self.budget_table.setAlternatingRowColors(True)
         self.budget_table.horizontalHeader().setStretchLastSection(True)
-        self.budget_table.setMinimumHeight(420)
+        self.budget_table.setMinimumHeight(320)
         self.budget_table.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.budget_table.itemChanged.connect(self._handle_budget_table_item_changed)
         self.budget_table.cellDoubleClicked.connect(self._handle_budget_table_cell_double_clicked)
         budget_layout.addWidget(self.budget_table)
 
         # Controls
-        button_row = QHBoxLayout()
+        button_row = QGridLayout()
+        button_row.setHorizontalSpacing(12)
+        button_row.setVerticalSpacing(12)
         self.budget_ai_suggest_button = QPushButton("AI Reallocate Next Month")
         self.budget_ai_suggest_button.clicked.connect(self._suggest_budget_with_ai)
         self.budget_save_button = QPushButton("Save Changes")
@@ -685,13 +690,15 @@ class MainWindow(QMainWindow):
         self.budget_ai_history_button = QPushButton("AI Plan History")
         self.budget_ai_history_button.clicked.connect(self._open_reallocation_audit_history_dialog)
 
-        button_row.addWidget(self.budget_ai_suggest_button)
-        button_row.addWidget(self.budget_save_button)
-        button_row.addWidget(self.budget_delete_button)
-        button_row.addWidget(self.budget_export_month_button)
-        button_row.addWidget(self.budget_import_month_button)
-        button_row.addWidget(self.budget_ai_history_button)
-        button_row.addStretch(1)
+        button_row.addWidget(self.budget_ai_suggest_button, 0, 0)
+        button_row.addWidget(self.budget_save_button, 0, 1)
+        button_row.addWidget(self.budget_delete_button, 0, 2)
+        button_row.addWidget(self.budget_export_month_button, 1, 0)
+        button_row.addWidget(self.budget_import_month_button, 1, 1)
+        button_row.addWidget(self.budget_ai_history_button, 1, 2)
+        button_row.setColumnStretch(0, 1)
+        button_row.setColumnStretch(1, 1)
+        button_row.setColumnStretch(2, 1)
         budget_layout.addLayout(button_row)
 
         layout.addWidget(budget_panel, 1)
@@ -699,7 +706,7 @@ class MainWindow(QMainWindow):
         # Add new budget category section
         add_panel = QFrame()
         add_panel.setObjectName("Panel")
-        add_layout = QHBoxLayout(add_panel)
+        add_layout = QGridLayout(add_panel)
         add_layout.setContentsMargins(18, 18, 18, 18)
         add_layout.setSpacing(12)
 
@@ -716,14 +723,16 @@ class MainWindow(QMainWindow):
         add_button = QPushButton("Add Category to Budget")
         add_button.clicked.connect(self._add_budget_entry)
 
-        add_layout.addWidget(add_label)
-        add_layout.addWidget(QLabel("Category:"))
-        add_layout.addWidget(self.new_budget_category, 1)
-        add_layout.addWidget(QLabel("Amount:"))
-        add_layout.addWidget(self.new_budget_amount)
-        add_layout.addWidget(QLabel("Notes:"))
-        add_layout.addWidget(self.new_budget_notes, 2)
-        add_layout.addWidget(add_button)
+        add_layout.addWidget(add_label, 0, 0, 1, 4)
+        add_layout.addWidget(QLabel("Category:"), 1, 0)
+        add_layout.addWidget(self.new_budget_category, 1, 1)
+        add_layout.addWidget(QLabel("Amount:"), 1, 2)
+        add_layout.addWidget(self.new_budget_amount, 1, 3)
+        add_layout.addWidget(QLabel("Notes:"), 2, 0)
+        add_layout.addWidget(self.new_budget_notes, 2, 1, 1, 2)
+        add_layout.addWidget(add_button, 2, 3)
+        add_layout.setColumnStretch(1, 1)
+        add_layout.setColumnStretch(2, 0)
         add_panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         layout.addWidget(add_panel)
         layout.setStretch(0, 0)
@@ -1300,7 +1309,8 @@ class MainWindow(QMainWindow):
 
         dialog = QDialog(self)
         dialog.setWindowTitle("AI Reallocation Review")
-        dialog.setMinimumSize(980, 560)
+        dialog.setMinimumSize(760, 480)
+        dialog.resize(980, 560)
 
         layout = QVBoxLayout(dialog)
         layout.setContentsMargins(16, 16, 16, 16)
@@ -1436,7 +1446,8 @@ class MainWindow(QMainWindow):
 
         dialog = QDialog(self)
         dialog.setWindowTitle("AI Reallocation History")
-        dialog.setMinimumSize(1200, 640)
+        dialog.setMinimumSize(860, 540)
+        dialog.resize(1180, 680)
 
         layout = QVBoxLayout(dialog)
         layout.setContentsMargins(16, 16, 16, 16)
@@ -1552,7 +1563,8 @@ class MainWindow(QMainWindow):
 
             detail_dialog = QDialog(self)
             detail_dialog.setWindowTitle("AI Reallocation Details")
-            detail_dialog.setMinimumSize(1000, 500)
+            detail_dialog.setMinimumSize(760, 460)
+            detail_dialog.resize(1000, 560)
 
             detail_layout = QVBoxLayout(detail_dialog)
             detail_layout.setContentsMargins(12, 12, 12, 12)
@@ -1696,8 +1708,8 @@ class MainWindow(QMainWindow):
         """Open the category management dialog."""
         dialog = QDialog(self)
         dialog.setWindowTitle("Manage Categories")
-        dialog.setMinimumWidth(600)
-        dialog.setMinimumHeight(400)
+        dialog.setMinimumSize(520, 360)
+        dialog.resize(680, 460)
 
         layout = QVBoxLayout(dialog)
         layout.setContentsMargins(20, 20, 20, 20)
@@ -2088,7 +2100,8 @@ class MainWindow(QMainWindow):
     def _add_new_asset_dialog(self) -> None:
         dialog = QDialog(self)
         dialog.setWindowTitle("Add New Asset")
-        dialog.setMinimumWidth(480)
+        dialog.setMinimumSize(420, 420)
+        dialog.resize(560, 560)
         form = QFormLayout(dialog)
 
         type_combo = QComboBox(); type_combo.addItems(["house", "investment"])
@@ -3601,7 +3614,8 @@ class MainWindow(QMainWindow):
         # Create edit dialog
         dialog = QDialog(self)
         dialog.setWindowTitle(f"Edit Recurring Item")
-        dialog.setMinimumWidth(500)
+        dialog.setMinimumSize(460, 420)
+        dialog.resize(560, 540)
 
         layout = QFormLayout(dialog)
 
@@ -3854,7 +3868,8 @@ class MainWindow(QMainWindow):
 
         dialog = QDialog(self)
         dialog.setWindowTitle("Edit Recent Transaction")
-        dialog.setMinimumWidth(480)
+        dialog.setMinimumSize(420, 340)
+        dialog.resize(520, 420)
         form = QFormLayout(dialog)
 
         kind_label = QLabel(transaction.kind.title())
