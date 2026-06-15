@@ -1,0 +1,11 @@
+{
+  "name": "noisy_trailing_pause",
+  "chunks": [
+    "noise",
+    "wake",
+    "speech",
+    "speech",
+    "silence",
+    "silence"
+  ]
+}

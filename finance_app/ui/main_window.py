@@ -65,6 +65,8 @@ class MainWindow(QMainWindow):
     voice_error_signal = pyqtSignal(str)
     voice_wake_signal = pyqtSignal(str)
     voice_command_signal = pyqtSignal(str)
+    voice_partial_signal = pyqtSignal(str)
+    voice_diagnostic_signal = pyqtSignal(object)
 
     def __init__(self) -> None:
         super().__init__()
@@ -77,12 +79,15 @@ class MainWindow(QMainWindow):
         self.recurring_controller = RecurringController(self.repository)
         self.transaction_controller = TransactionController(self.repository)
         self.assistant_service = AssistantService(self.repository)
-        self.voice_coordinator = VoiceCoordinator(wake_phrase="hey steven")
+        self._wake_phrase = self._load_wake_phrase_setting()
+        self.voice_coordinator = VoiceCoordinator(wake_phrase=self._wake_phrase)
         self._ui_scale = self._load_ui_scale_setting()
         self._density_mode = self._load_ui_density_setting()
         self._layout_base_metrics: dict[int, tuple[tuple[int, int, int, int], int]] = {}
         self._density_actions: dict[str, QAction] = {}
         self.voice_enabled = False
+        self._voice_active_surface: str | None = None
+        self._voice_ui: dict[str, dict[str, object]] = {}
         self._assistant_worker: AssistantWorker | None = None
         self._ollama_warmup_worker: OllamaWarmupWorker | None = None
         self._selected_year = date.today().year
@@ -106,6 +111,7 @@ class MainWindow(QMainWindow):
         self.budget_tab = QWidget()
         self.assets_tab = QWidget()
         self.assistant_tab = QWidget()
+        self.voice_test_tab = QWidget()
 
         self.tabs.addTab(self.dashboard_tab, "Overview")
         self.tabs.addTab(self.charts_tab, "Charts")
@@ -114,6 +120,7 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.budget_tab, "Budget")
         self.tabs.addTab(self.assets_tab, "Assets")
         self.tabs.addTab(self.assistant_tab, "Assistant")
+        self.tabs.addTab(self.voice_test_tab, "Voice Test")
 
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
@@ -126,6 +133,7 @@ class MainWindow(QMainWindow):
         self._build_budget_tab()
         self._build_assets_tab()
         self._build_assistant_tab()
+        self._build_voice_test_tab()
         self._build_menu_bar()
         self._capture_layout_base_metrics()
         self._setup_ui_scale_controls()
@@ -135,11 +143,10 @@ class MainWindow(QMainWindow):
         self.voice_error_signal.connect(self._handle_voice_error)
         self.voice_wake_signal.connect(self._handle_voice_wake)
         self.voice_command_signal.connect(self._handle_voice_command)
+        self.voice_partial_signal.connect(self._handle_voice_partial)
+        self.voice_diagnostic_signal.connect(self._handle_voice_diagnostic)
 
-        self.voice_coordinator.on_status = self.voice_status_signal.emit
-        self.voice_coordinator.on_error = self.voice_error_signal.emit
-        self.voice_coordinator.on_wake = self.voice_wake_signal.emit
-        self.voice_coordinator.on_command = self.voice_command_signal.emit
+        self._bind_voice_coordinator_callbacks()
         
         # Load saved model preference
         saved_model = self.app_controller.get_setting("selected_model")
@@ -2706,14 +2713,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(title)
         layout.addWidget(subtitle)
 
-        voice_row = QHBoxLayout()
-        self.voice_toggle_button = QPushButton("Start Voice (Hey Steven)")
-        self.voice_toggle_button.clicked.connect(self._toggle_voice_listener)
-        self.voice_status_label = QLabel("Voice: Off")
-        self.voice_status_label.setObjectName("PageSubtitle")
-        voice_row.addWidget(self.voice_toggle_button)
-        voice_row.addWidget(self.voice_status_label, 1)
-        layout.addLayout(voice_row)
+        self._build_voice_surface_section(layout, mode="assistant", output_placeholder=None)
 
         # Model selector
         model_selector_row = QHBoxLayout()
@@ -2743,6 +2743,129 @@ class MainWindow(QMainWindow):
         input_row.addWidget(self.chat_input, 1)
         input_row.addWidget(self.send_button)
         layout.addLayout(input_row)
+
+    def _build_voice_test_tab(self) -> None:
+        layout = self._build_scrollable_tab_layout(self.voice_test_tab)
+
+        title = QLabel("Voice Testing")
+        title.setObjectName("PageTitle")
+        subtitle = QLabel(
+            "Use this tab to validate speech-to-text behavior, wake detection, and diagnostics without sending anything to the AI assistant."
+        )
+        subtitle.setObjectName("PageSubtitle")
+        layout.addWidget(title)
+        layout.addWidget(subtitle)
+
+        self._build_voice_surface_section(
+            layout,
+            mode="testing",
+            output_placeholder="Recognized voice commands will appear here without being sent to the assistant...",
+        )
+
+    def _build_voice_surface_section(
+        self,
+        layout: QVBoxLayout,
+        mode: str,
+        output_placeholder: str | None,
+    ) -> None:
+        voice_row = QHBoxLayout()
+        button = QPushButton(self._voice_start_button_label())
+        if mode == "assistant":
+            button.clicked.connect(self._toggle_voice_listener)
+        else:
+            button.clicked.connect(self._toggle_voice_test_listener)
+
+        status_label = QLabel("Voice: Off")
+        status_label.setObjectName("PageSubtitle")
+        voice_row.addWidget(button)
+        voice_row.addWidget(status_label, 1)
+        layout.addLayout(voice_row)
+
+        wake_row = QHBoxLayout()
+        wake_row.addWidget(QLabel("Wake phrase:"))
+        wake_input = QLineEdit()
+        wake_input.setText(self._wake_phrase)
+        wake_input.setPlaceholderText("hey steven")
+        wake_apply_button = QPushButton("Apply Wake Phrase")
+        wake_apply_button.clicked.connect(lambda: self._apply_wake_phrase_from_surface(mode))
+        wake_input.returnPressed.connect(lambda: self._apply_wake_phrase_from_surface(mode))
+        wake_row.addWidget(wake_input, 1)
+        wake_row.addWidget(wake_apply_button)
+        layout.addLayout(wake_row)
+
+        last_command_label = QLabel("Last voice command: (none)")
+        last_command_label.setObjectName("PageSubtitle")
+        last_command_label.setWordWrap(True)
+        layout.addWidget(last_command_label)
+
+        partial_label = QLabel("Live transcript: (waiting)")
+        partial_label.setObjectName("PageSubtitle")
+        partial_label.setWordWrap(True)
+        layout.addWidget(partial_label)
+
+        diagnostics_panel = QFrame()
+        diagnostics_panel.setObjectName("Panel")
+        diagnostics_layout = QGridLayout(diagnostics_panel)
+        diagnostics_layout.setContentsMargins(12, 10, 12, 10)
+        diagnostics_layout.setHorizontalSpacing(10)
+        diagnostics_layout.setVerticalSpacing(6)
+
+        diagnostics_layout.addWidget(QLabel("Voice Diagnostics"), 0, 0, 1, 4)
+        diagnostics_layout.addWidget(QLabel("Stage"), 1, 0)
+        diagnostics_layout.addWidget(QLabel("Provider"), 1, 1)
+        diagnostics_layout.addWidget(QLabel("Confidence"), 1, 2)
+        diagnostics_layout.addWidget(QLabel("Latency"), 1, 3)
+
+        diag_stage = QLabel("-")
+        diag_provider = QLabel("-")
+        diag_confidence = QLabel("-")
+        diag_latency = QLabel("-")
+        diagnostics_layout.addWidget(diag_stage, 2, 0)
+        diagnostics_layout.addWidget(diag_provider, 2, 1)
+        diagnostics_layout.addWidget(diag_confidence, 2, 2)
+        diagnostics_layout.addWidget(diag_latency, 2, 3)
+
+        diagnostics_layout.addWidget(QLabel("Fallback"), 3, 0)
+        diagnostics_layout.addWidget(QLabel("Endpoint"), 3, 1)
+        diagnostics_layout.addWidget(QLabel("Speech ms"), 3, 2)
+        diagnostics_layout.addWidget(QLabel("Wake mode"), 3, 3)
+
+        diag_fallback = QLabel("-")
+        diag_endpoint = QLabel("-")
+        diag_speech_ms = QLabel("-")
+        diag_wake_mode = QLabel("-")
+        diagnostics_layout.addWidget(diag_fallback, 4, 0)
+        diagnostics_layout.addWidget(diag_endpoint, 4, 1)
+        diagnostics_layout.addWidget(diag_speech_ms, 4, 2)
+        diagnostics_layout.addWidget(diag_wake_mode, 4, 3)
+        layout.addWidget(diagnostics_panel)
+
+        output_box: QTextEdit | None = None
+        if output_placeholder is not None:
+            output_box = QTextEdit()
+            output_box.setReadOnly(True)
+            output_box.setObjectName("ChatLog")
+            output_box.setPlaceholderText(output_placeholder)
+            layout.addWidget(output_box, 1)
+            if mode == "testing":
+                self.voice_test_output = output_box
+
+        self._voice_ui[mode] = {
+            "button": button,
+            "status": status_label,
+            "wake_input": wake_input,
+            "last_command": last_command_label,
+            "partial": partial_label,
+            "diag_stage": diag_stage,
+            "diag_provider": diag_provider,
+            "diag_confidence": diag_confidence,
+            "diag_latency": diag_latency,
+            "diag_fallback": diag_fallback,
+            "diag_endpoint": diag_endpoint,
+            "diag_speech_ms": diag_speech_ms,
+            "diag_wake_mode": diag_wake_mode,
+            "output": output_box,
+        }
 
     def _build_menu_bar(self) -> None:
         menu_bar = self.menuBar()
@@ -4070,38 +4193,220 @@ class MainWindow(QMainWindow):
         self.status_bar.showMessage(f"Switched to model: {model_name}", 3000)
 
     def _toggle_voice_listener(self) -> None:
-        if not self.voice_enabled:
-            self.voice_coordinator.start()
-            self.voice_enabled = True
-            self.voice_toggle_button.setText("Stop Voice")
-            self.voice_status_label.setText("Voice: Listening for 'Hey Steven'...")
-            self.status_bar.showMessage("Voice listener started.", 3000)
+        self._toggle_voice_listener_for_mode("assistant")
+
+    def _toggle_voice_test_listener(self) -> None:
+        self._toggle_voice_listener_for_mode("testing")
+
+    def _toggle_voice_listener_for_mode(self, mode: str) -> None:
+        if self.voice_enabled and self._voice_active_surface == mode:
+            self.voice_coordinator.stop()
+            self.voice_enabled = False
+            self._voice_active_surface = None
+            self._reset_voice_surfaces_after_stop()
+            self.status_bar.showMessage("Voice listener stopped.", 3000)
             return
 
-        self.voice_coordinator.stop()
-        self.voice_enabled = False
-        self.voice_toggle_button.setText("Start Voice (Hey Steven)")
-        self.voice_status_label.setText("Voice: Off")
-        self.status_bar.showMessage("Voice listener stopped.", 3000)
+        if self.voice_enabled and self._voice_active_surface != mode:
+            self.voice_coordinator.stop()
+            self.voice_enabled = False
+
+        self._voice_active_surface = mode
+        self.voice_coordinator.start()
+        self.voice_enabled = True
+        self._reset_voice_surfaces_after_stop()
+        self._set_voice_surface_button_text(mode, "Stop Voice")
+        self._set_voice_surface_status_text(mode, "Voice: Listening for 'Hey Steven'...")
+        self._set_voice_surface_partial_text(mode, "Live transcript: (waiting)")
+        self.status_bar.showMessage("Voice listener started.", 3000)
 
     def _handle_voice_status(self, message: str) -> None:
-        self.voice_status_label.setText(f"Voice: {message}")
+        mode = self._voice_active_surface or "assistant"
+        self._set_voice_surface_status_text(mode, f"Voice: {message}")
         self.status_bar.showMessage(message, 2500)
 
     def _handle_voice_error(self, message: str) -> None:
-        self.voice_status_label.setText("Voice: Error")
+        mode = self._voice_active_surface or "assistant"
+        self._set_voice_surface_status_text(mode, "Voice: Error")
         self.status_bar.showMessage(message, 6000)
-        self.chat_log.append(f"<i>Voice error:</i> {html.escape(message)}")
+        if mode == "assistant":
+            self.chat_log.append(f"<i>Voice error:</i> {html.escape(message)}")
+        else:
+            output_box = self._voice_output_box(mode)
+            if output_box is not None:
+                output_box.append(f"[Voice error] {message}")
+        self._set_voice_surface_last_command_text(mode, "Last voice command: (error - see output)")
 
     def _handle_voice_wake(self, source_id: str) -> None:
-        self.chat_log.append(f"<i>Wake detected from {html.escape(source_id)}. Listening...</i>")
+        mode = self._voice_active_surface or "assistant"
+        if mode == "assistant":
+            self.chat_log.append(f"<i>Wake detected from {html.escape(source_id)}. Listening...</i>")
+        else:
+            output_box = self._voice_output_box(mode)
+            if output_box is not None:
+                output_box.append(f"[Wake detected] {source_id}")
+        self._set_voice_surface_partial_text(mode, "Live transcript: (listening)")
+
+    def _handle_voice_partial(self, partial_text: str) -> None:
+        mode = self._voice_active_surface or "assistant"
+        text = partial_text.strip()
+        if not text:
+            self._set_voice_surface_partial_text(mode, "Live transcript: (waiting)")
+            return
+        self._set_voice_surface_partial_text(mode, f"Live transcript: {text}")
+
+    def _handle_voice_diagnostic(self, payload: object) -> None:
+        if not isinstance(payload, dict):
+            return
+
+        mode = self._voice_active_surface or "assistant"
+        widgets = self._voice_ui.get(mode)
+        if widgets is None:
+            return
+
+        stage = str(payload.get("stage", "")).strip() or "-"
+        provider = str(payload.get("provider", "")).strip() or "-"
+        fallback_reason = str(payload.get("fallback_reason", "")).strip() or "-"
+        endpoint_reason = str(payload.get("endpoint_reason", "")).strip() or "-"
+        wake_mode = str(payload.get("wake_mode", "")).strip() or "-"
+
+        confidence_raw = payload.get("confidence")
+        confidence = "-"
+        if isinstance(confidence_raw, (float, int)):
+            confidence = f"{float(confidence_raw):.2f}"
+
+        latency_raw = payload.get("latency_ms")
+        latency = "-"
+        if isinstance(latency_raw, (float, int)):
+            latency = f"{int(latency_raw)} ms"
+
+        speech_raw = payload.get("speech_ms")
+        speech_ms = "-"
+        if isinstance(speech_raw, (float, int)):
+            speech_ms = f"{int(speech_raw)}"
+
+        widgets["diag_stage"].setText(stage)  # type: ignore[call-arg]
+        widgets["diag_provider"].setText(provider)  # type: ignore[call-arg]
+        widgets["diag_confidence"].setText(confidence)  # type: ignore[call-arg]
+        widgets["diag_latency"].setText(latency)  # type: ignore[call-arg]
+        widgets["diag_fallback"].setText(fallback_reason)  # type: ignore[call-arg]
+        widgets["diag_endpoint"].setText(endpoint_reason)  # type: ignore[call-arg]
+        widgets["diag_speech_ms"].setText(speech_ms)  # type: ignore[call-arg]
+        widgets["diag_wake_mode"].setText(wake_mode)  # type: ignore[call-arg]
 
     def _handle_voice_command(self, command_text: str) -> None:
         if not command_text.strip():
             return
-        self.chat_input.setText(command_text)
-        self.chat_log.append(f"<b>You (voice):</b> {html.escape(command_text)}")
-        self.send_prompt()
+        mode = self._voice_active_surface or "assistant"
+        self._set_voice_surface_last_command_text(mode, f"Last voice command: {command_text}")
+        self._set_voice_surface_partial_text(mode, "Live transcript: (sent)")
+
+        if mode == "assistant":
+            self.chat_input.setText(command_text)
+            self.chat_log.append(f"<b>You (voice):</b> {html.escape(command_text)}")
+            self.send_prompt()
+            return
+
+        output_box = self._voice_output_box(mode)
+        if output_box is not None:
+            output_box.append(command_text)
+
+    def _load_wake_phrase_setting(self) -> str:
+        raw_value = self.app_controller.get_setting("voice_wake_phrase", "hey steven") or "hey steven"
+        normalized = " ".join(raw_value.strip().split())
+        return normalized or "hey steven"
+
+    def _bind_voice_coordinator_callbacks(self) -> None:
+        self.voice_coordinator.on_status = self.voice_status_signal.emit
+        self.voice_coordinator.on_error = self.voice_error_signal.emit
+        self.voice_coordinator.on_wake = self.voice_wake_signal.emit
+        self.voice_coordinator.on_command = self.voice_command_signal.emit
+        self.voice_coordinator.on_partial = self.voice_partial_signal.emit
+        self.voice_coordinator.on_diagnostic = self.voice_diagnostic_signal.emit
+
+    def _voice_start_button_label(self) -> str:
+        return f"Start Voice ({self._display_wake_phrase()})"
+
+    def _display_wake_phrase(self) -> str:
+        return self._wake_phrase.title()
+
+    def _apply_wake_phrase_from_surface(self, mode: str) -> None:
+        widgets = self._voice_ui.get(mode)
+        if widgets is None:
+            return
+
+        wake_input = widgets.get("wake_input")
+        if not isinstance(wake_input, QLineEdit):
+            return
+
+        new_phrase = " ".join(wake_input.text().strip().split())
+        if not new_phrase:
+            QMessageBox.warning(self, APP_NAME, "Wake phrase cannot be empty.")
+            return
+
+        was_running = self.voice_enabled
+        active_surface = self._voice_active_surface
+        if was_running:
+            self.voice_coordinator.stop()
+            self.voice_enabled = False
+
+        self._wake_phrase = new_phrase
+        self.app_controller.set_setting("voice_wake_phrase", new_phrase)
+        self.voice_coordinator = VoiceCoordinator(wake_phrase=new_phrase)
+        self._bind_voice_coordinator_callbacks()
+        self._sync_wake_phrase_inputs()
+        self._reset_voice_surfaces_after_stop()
+        self.status_bar.showMessage(f"Wake phrase updated to '{self._display_wake_phrase()}'.", 4000)
+
+        if was_running and active_surface is not None:
+            self._voice_active_surface = active_surface
+            self.voice_coordinator.start()
+            self.voice_enabled = True
+            self._set_voice_surface_button_text(active_surface, "Stop Voice")
+            self._set_voice_surface_status_text(
+                active_surface,
+                f"Voice: Listening for '{self._display_wake_phrase()}'...",
+            )
+            self._set_voice_surface_partial_text(active_surface, "Live transcript: (waiting)")
+
+    def _sync_wake_phrase_inputs(self) -> None:
+        for widgets in self._voice_ui.values():
+            wake_input = widgets.get("wake_input")
+            if isinstance(wake_input, QLineEdit):
+                wake_input.setText(self._wake_phrase)
+
+    def _set_voice_surface_status_text(self, mode: str, text: str) -> None:
+        widgets = self._voice_ui.get(mode)
+        if widgets is not None:
+            widgets["status"].setText(text)  # type: ignore[call-arg]
+
+    def _set_voice_surface_last_command_text(self, mode: str, text: str) -> None:
+        widgets = self._voice_ui.get(mode)
+        if widgets is not None:
+            widgets["last_command"].setText(text)  # type: ignore[call-arg]
+
+    def _set_voice_surface_partial_text(self, mode: str, text: str) -> None:
+        widgets = self._voice_ui.get(mode)
+        if widgets is not None:
+            widgets["partial"].setText(text)  # type: ignore[call-arg]
+
+    def _set_voice_surface_button_text(self, mode: str, text: str) -> None:
+        widgets = self._voice_ui.get(mode)
+        if widgets is not None:
+            widgets["button"].setText(text)  # type: ignore[call-arg]
+
+    def _voice_output_box(self, mode: str) -> QTextEdit | None:
+        widgets = self._voice_ui.get(mode)
+        if widgets is None:
+            return None
+        output = widgets.get("output")
+        return output if isinstance(output, QTextEdit) else None
+
+    def _reset_voice_surfaces_after_stop(self) -> None:
+        for mode in self._voice_ui:
+            self._set_voice_surface_button_text(mode, self._voice_start_button_label())
+            self._set_voice_surface_status_text(mode, "Voice: Off")
+            self._set_voice_surface_partial_text(mode, "Live transcript: (off)")
 
     def _handle_assistant_result(self, result: AssistantResult) -> None:
         formatted_reply = self._format_assistant_reply_html(result.reply)

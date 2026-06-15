@@ -1,0 +1,14 @@
+{
+  "name": "noisy_pause_resume",
+  "chunks": [
+    "noise",
+    "noise",
+    "wake",
+    "speech",
+    "speech",
+    "silence",
+    "speech",
+    "silence",
+    "silence"
+  ]
+}

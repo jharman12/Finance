@@ -2,12 +2,22 @@ from __future__ import annotations
 
 import json
 import os
-import queue
 import threading
 import time
+from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
+
+from finance_app.services.voice.asr_faster_whisper import FasterWhisperAsrProvider
+from finance_app.services.voice.asr_router import AsrRouter
+from finance_app.services.voice.asr_vosk import VoskAsrProvider
+from finance_app.services.voice.postprocess import normalize_command_text
+from finance_app.services.voice.session_state import VoiceSessionState
+from finance_app.services.voice.stream_source import MicStreamSource
+from finance_app.services.voice.telemetry import VoiceTelemetryLogger
+from finance_app.services.voice.vad_endpointing import VoiceActivityEndpoint
+from finance_app.services.voice.wake_detector import OpenWakeWordDetector, VoskPhraseWakeDetector
 
 
 @dataclass(slots=True)
@@ -99,112 +109,6 @@ class WakeWordCommandRouter:
         return " ".join(cleaned.split())
 
 
-class LocalUsbMicNode:
-    """Captures speech from default input device and emits transcripts.
-
-    Uses Vosk + sounddevice for local/offline STT.
-    """
-
-    def __init__(
-        self,
-        source_id: str = "local-usb-mic",
-        sample_rate: int = 16000,
-        model_path: str | None = None,
-    ) -> None:
-        self.source_id = source_id
-        self.sample_rate = sample_rate
-        self.model_path = model_path or os.getenv("FINANCE_APP_VOSK_MODEL_PATH", "models/vosk-model-en-us-0.22-lgraph")
-
-        self.on_text: Callable[[VoiceTextEvent], None] | None = None
-        self.on_status: Callable[[str], None] | None = None
-        self.on_error: Callable[[str], None] | None = None
-
-        self._stop_event = threading.Event()
-        self._thread: threading.Thread | None = None
-
-    def start(self) -> None:
-        if self._thread is not None and self._thread.is_alive():
-            return
-        self._stop_event.clear()
-        self._thread = threading.Thread(target=self._run, name="LocalUsbMicNode", daemon=True)
-        self._thread.start()
-
-    def stop(self) -> None:
-        self._stop_event.set()
-        if self._thread is not None and self._thread.is_alive():
-            self._thread.join(timeout=2.0)
-
-    def _run(self) -> None:
-        try:
-            import sounddevice as sd
-            from vosk import KaldiRecognizer, Model
-        except ImportError:
-            if self.on_error:
-                self.on_error(
-                    "Voice dependencies missing. Install: pip install vosk sounddevice"
-                )
-            return
-
-        model_dir = Path(self.model_path)
-        if not model_dir.exists():
-            if self.on_error:
-                self.on_error(
-                    "Vosk model not found. Download a model (e.g. vosk-model-en-us-0.22-lgraph) "
-                    "and set FINANCE_APP_VOSK_MODEL_PATH or place it under models/."
-                )
-            return
-
-        try:
-            model = Model(str(model_dir))
-            recognizer = KaldiRecognizer(model, self.sample_rate)
-        except Exception as exc:
-            if self.on_error:
-                self.on_error(f"Failed to initialize Vosk model: {exc}")
-            return
-
-        audio_queue: queue.Queue[bytes] = queue.Queue(maxsize=64)
-
-        def callback(indata, frames, time_info, status) -> None:  # type: ignore[no-untyped-def]
-            del frames, time_info
-            if status and self.on_status:
-                self.on_status(f"Mic status: {status}")
-            try:
-                audio_queue.put_nowait(bytes(indata))
-            except queue.Full:
-                pass
-
-        if self.on_status:
-            self.on_status("Voice listener ready. Say 'Hey Steven'...")
-
-        try:
-            with sd.RawInputStream(
-                samplerate=self.sample_rate,
-                blocksize=8000,
-                dtype="int16",
-                channels=1,
-                callback=callback,
-            ):
-                while not self._stop_event.is_set():
-                    try:
-                        chunk = audio_queue.get(timeout=0.2)
-                    except queue.Empty:
-                        continue
-
-                    if recognizer.AcceptWaveform(chunk):
-                        payload = json.loads(recognizer.Result())
-                        final_text = str(payload.get("text", "")).strip()
-                        if final_text and self.on_text:
-                            self.on_text(VoiceTextEvent(text=final_text, is_final=True, source_id=self.source_id))
-                    else:
-                        payload = json.loads(recognizer.PartialResult())
-                        partial = str(payload.get("partial", "")).strip()
-                        if partial and self.on_text:
-                            self.on_text(VoiceTextEvent(text=partial, is_final=False, source_id=self.source_id))
-        except Exception as exc:
-            if self.on_error:
-                self.on_error(f"Microphone capture failed: {exc}")
-
-
 class VoiceCoordinator:
     """Coordinates voice input nodes and wake-word routing.
 
@@ -213,30 +117,454 @@ class VoiceCoordinator:
 
     def __init__(self, wake_phrase: str = "hey steven") -> None:
         self.router = WakeWordCommandRouter(wake_phrase=wake_phrase)
-        self.local_node = LocalUsbMicNode()
+        self.sample_rate = 16000
+        self.source_id = "local-usb-mic"
+        self.model_path = os.getenv("FINANCE_APP_VOSK_MODEL_PATH", "models/vosk-model-en-us-0.22-lgraph")
+
+        self.stream = MicStreamSource(sample_rate=self.sample_rate, blocksize=1600)
+        self.endpoint = VoiceActivityEndpoint(
+            min_speech_ms=int(os.getenv("FINANCE_APP_VOICE_MIN_UTTERANCE_MS", "300")),
+            end_silence_ms=int(os.getenv("FINANCE_APP_VOICE_ENDPOINT_SILENCE_MS", "700")),
+            max_utterance_ms=int(os.getenv("FINANCE_APP_VOICE_MAX_UTTERANCE_MS", "12000")),
+            energy_threshold=float(os.getenv("FINANCE_APP_VOICE_ENERGY_THRESHOLD", "450")),
+        )
+        self.state = VoiceSessionState.IDLE
+        self._capture_chunks: list[bytes] = []
+        self._preroll_chunks: deque[bytes] = deque(maxlen=8)
+        self._state_lock = threading.Lock()
+        self._utterance_id = 0
+        self._cooldown_seconds = float(os.getenv("FINANCE_APP_VOICE_COOLDOWN_SECONDS", "0.7"))
+        self._cooldown_until = 0.0
+        self._partial_preview_recognizer = None
+        self._last_partial_preview = ""
+        self._partial_emit_interval_seconds = float(os.getenv("FINANCE_APP_VOICE_PARTIAL_INTERVAL_SECONDS", "0.2"))
+        self._last_partial_emit_at = 0.0
+        self._continuation_window_seconds = float(os.getenv("FINANCE_APP_VOICE_CONTINUATION_SECONDS", "0.7"))
+        self._awaiting_continuation = False
+        self._continuation_deadline = 0.0
+
+        telemetry_path = os.getenv("FINANCE_APP_VOICE_TELEMETRY_PATH", str(Path("logs") / "voice_events.jsonl"))
+        self.telemetry = VoiceTelemetryLogger(Path(telemetry_path))
+
+        asr_primary = os.getenv("FINANCE_APP_VOICE_ASR_PRIMARY", "faster_whisper").strip().lower()
+        fw_provider = FasterWhisperAsrProvider(
+            model_size=os.getenv("FINANCE_APP_FW_MODEL_SIZE", "small.en"),
+            device=os.getenv("FINANCE_APP_FW_DEVICE", "cpu"),
+            compute_type=os.getenv("FINANCE_APP_FW_COMPUTE_TYPE", "int8"),
+            cpu_threads=int(os.getenv("FINANCE_APP_FW_CPU_THREADS", "4")),
+        )
+        vosk_provider = VoskAsrProvider(self.model_path)
+
+        if asr_primary == "vosk":
+            primary_provider = vosk_provider
+            fallback_provider = fw_provider
+        else:
+            primary_provider = fw_provider
+            fallback_provider = vosk_provider
+
+        self.asr_router = AsrRouter(primary=primary_provider, fallback=fallback_provider)
+
+        self.wake_mode = os.getenv("FINANCE_APP_WAKE_MODE", "phrase_vosk").strip().lower()
+        self._wake_detector = self._build_wake_detector()
 
         self.on_status: Callable[[str], None] | None = None
         self.on_error: Callable[[str], None] | None = None
         self.on_wake: Callable[[str], None] | None = None
         self.on_command: Callable[[str], None] | None = None
+        self.on_partial: Callable[[str], None] | None = None
+        self.on_diagnostic: Callable[[dict[str, Any]], None] | None = None
 
         self.router.on_status = self._emit_status
         self.router.on_wake = self._emit_wake
         self.router.on_command = self._emit_command
 
-        self.local_node.on_text = self.router.process_text
-        self.local_node.on_status = self._emit_status
-        self.local_node.on_error = self._emit_error
-
     def start(self) -> None:
-        self.local_node.start()
+        if not self._initialize_wake_detector():
+            return
+
+        with self._state_lock:
+            self.state = VoiceSessionState.IDLE
+            self.endpoint.reset()
+            self._capture_chunks.clear()
+            self._preroll_chunks.clear()
+            self._cooldown_until = 0.0
+            self._partial_preview_recognizer = None
+            self._last_partial_preview = ""
+            self._last_partial_emit_at = 0.0
+            self._awaiting_continuation = False
+            self._continuation_deadline = 0.0
+
+        self.stream.start(
+            on_audio_chunk=self._handle_audio_chunk,
+            on_status=self._emit_status,
+            on_error=self._handle_stream_error,
+        )
+        self.telemetry.log("voice_started", wake_mode=self.wake_mode)
+        self._emit_diagnostic(stage="started", wake_mode=self.wake_mode)
 
     def stop(self) -> None:
-        self.local_node.stop()
+        self.stream.stop()
+        if self._wake_detector is not None:
+            try:
+                self._wake_detector.stop()
+            except Exception:
+                pass
+        with self._state_lock:
+            self.state = VoiceSessionState.IDLE
+            self._capture_chunks.clear()
+            self._preroll_chunks.clear()
+            self.endpoint.reset()
+            self._cooldown_until = 0.0
+            self._partial_preview_recognizer = None
+            self._last_partial_preview = ""
+            self._last_partial_emit_at = 0.0
+            self._awaiting_continuation = False
+            self._continuation_deadline = 0.0
+        self.telemetry.log("voice_stopped")
+        self._emit_diagnostic(stage="stopped")
 
     def ingest_remote_text(self, text: str, source_id: str = "remote-node", is_final: bool = True) -> None:
         """Future expansion point for remote Alexa-like devices."""
         self.router.process_text(VoiceTextEvent(text=text, is_final=is_final, source_id=source_id))
+
+    def _build_wake_detector(self):
+        if self.wake_mode == "openwakeword":
+            return OpenWakeWordDetector(
+                sample_rate=self.sample_rate,
+                threshold=float(os.getenv("FINANCE_APP_WAKE_THRESHOLD", "0.5")),
+                model_path=os.getenv("FINANCE_APP_OPENWAKEWORD_MODEL_PATH"),
+            )
+        return VoskPhraseWakeDetector(
+            model_path=self.model_path,
+            sample_rate=self.sample_rate,
+            wake_phrase=self.router.wake_phrase,
+        )
+
+    def _initialize_wake_detector(self) -> bool:
+        detector = self._wake_detector
+        if detector is None:
+            self._emit_error("No wake detector configured.")
+            return False
+
+        try:
+            detector.start()
+            return True
+        except Exception as exc:
+            self._emit_error(f"Failed to initialize wake detector ({getattr(detector, 'name', 'unknown')}): {exc}")
+            # Fallback to phrase wake if optional detector fails.
+            if self.wake_mode == "openwakeword":
+                self.wake_mode = "phrase_vosk"
+                self._wake_detector = self._build_wake_detector()
+                return self._initialize_wake_detector()
+            return False
+
+    def _handle_audio_chunk(self, chunk: bytes) -> None:
+        if not chunk:
+            return
+
+        with self._state_lock:
+            self._preroll_chunks.append(chunk)
+            state = self.state
+            in_cooldown = self._in_cooldown_locked()
+
+        if state in (VoiceSessionState.DECODING, VoiceSessionState.DISPATCHING, VoiceSessionState.ERROR):
+            return
+
+        if in_cooldown:
+            return
+
+        if state == VoiceSessionState.IDLE:
+            self._process_wake_chunk(chunk)
+            return
+
+        if state == VoiceSessionState.CAPTURING:
+            self._process_capture_chunk(chunk)
+
+    def _process_wake_chunk(self, chunk: bytes) -> None:
+        detector = self._wake_detector
+        if detector is None:
+            return
+
+        try:
+            detected = bool(detector.detect(chunk))
+        except Exception as exc:
+            self._emit_error(f"Wake detection failed: {exc}")
+            self.telemetry.log("wake_error", error=str(exc))
+            return
+
+        if not detected:
+            return
+
+        with self._state_lock:
+            self.state = VoiceSessionState.WAKE_DETECTED
+            self.state = VoiceSessionState.CAPTURING
+            self.endpoint.reset()
+            self._capture_chunks = list(self._preroll_chunks)
+            self._utterance_id += 1
+            utterance_id = self._utterance_id
+            self._initialize_partial_preview_recognizer_locked()
+            self._last_partial_preview = ""
+            self._last_partial_emit_at = 0.0
+            self._awaiting_continuation = False
+            self._continuation_deadline = 0.0
+
+        self._emit_wake(self.source_id)
+        self._emit_status("Wake detected. Listening for command...")
+        self._emit_diagnostic(stage="wake", source_id=self.source_id, wake_mode=self.wake_mode, utterance_id=utterance_id)
+        self.telemetry.log(
+            "wake_detected",
+            source_id=self.source_id,
+            wake_mode=self.wake_mode,
+            utterance_id=utterance_id,
+        )
+
+    def _process_capture_chunk(self, chunk: bytes) -> None:
+        self._emit_partial_preview(chunk)
+
+        now = time.monotonic()
+        is_speech = self.endpoint.is_speech_chunk(chunk)
+
+        with self._state_lock:
+            if self.state != VoiceSessionState.CAPTURING:
+                return
+            self._capture_chunks.append(chunk)
+            decision = self.endpoint.process_chunk(chunk, self.sample_rate)
+            waiting_for_continuation = self._awaiting_continuation
+            continuation_deadline = self._continuation_deadline
+
+        if waiting_for_continuation:
+            if is_speech:
+                with self._state_lock:
+                    self._awaiting_continuation = False
+                    self._continuation_deadline = 0.0
+                self._emit_status("Speech resumed. Continuing capture...")
+                self._emit_diagnostic(stage="continuation_resumed", utterance_id=self._utterance_id)
+                self.telemetry.log("continuation_resumed", utterance_id=self._utterance_id)
+                return
+
+            if now < continuation_deadline:
+                return
+
+            self.telemetry.log(
+                "continuation_timeout",
+                utterance_id=self._utterance_id,
+                waited_seconds=self._continuation_window_seconds,
+            )
+            decision.utterance_complete = True
+            decision.reason = "continuation_timeout"
+            with self._state_lock:
+                self._awaiting_continuation = False
+                self._continuation_deadline = 0.0
+
+        if not decision.utterance_complete:
+            return
+
+        if decision.reason == "silence" and self._continuation_window_seconds > 0.0:
+            with self._state_lock:
+                if self.state == VoiceSessionState.CAPTURING:
+                    self._awaiting_continuation = True
+                    self._continuation_deadline = now + self._continuation_window_seconds
+            self._emit_status("Pause detected. Waiting briefly for continuation...")
+            self._emit_diagnostic(
+                stage="continuation_wait",
+                utterance_id=self._utterance_id,
+                seconds=self._continuation_window_seconds,
+            )
+            self.telemetry.log(
+                "continuation_window_started",
+                utterance_id=self._utterance_id,
+                seconds=self._continuation_window_seconds,
+            )
+            return
+
+        with self._state_lock:
+            if self.state != VoiceSessionState.CAPTURING:
+                return
+            self.state = VoiceSessionState.DECODING
+            utterance_audio = b"".join(self._capture_chunks)
+            self._capture_chunks.clear()
+            utterance_id = self._utterance_id
+            self._partial_preview_recognizer = None
+            self._last_partial_preview = ""
+            self._awaiting_continuation = False
+            self._continuation_deadline = 0.0
+
+        self._emit_status("Transcribing command...")
+        self._emit_diagnostic(
+            stage="endpoint",
+            utterance_id=utterance_id,
+            endpoint_reason=decision.reason,
+            speech_ms=decision.speech_ms,
+        )
+        self.telemetry.log(
+            "endpoint_complete",
+            utterance_id=utterance_id,
+            reason=decision.reason,
+            speech_ms=decision.speech_ms,
+        )
+        self._decode_and_dispatch(utterance_audio, utterance_id)
+
+    def _decode_and_dispatch(self, utterance_audio: bytes, utterance_id: int) -> None:
+        try:
+            result = self.asr_router.transcribe_pcm16(utterance_audio, self.sample_rate)
+        except Exception as exc:
+            with self._state_lock:
+                self.state = VoiceSessionState.ERROR
+            self._emit_error(f"Voice transcription failed: {exc}")
+            self._emit_diagnostic(stage="decode_error", utterance_id=utterance_id, error=str(exc))
+            self.telemetry.log("decode_error", utterance_id=utterance_id, error=str(exc))
+            with self._state_lock:
+                self.state = VoiceSessionState.IDLE
+                self.endpoint.reset()
+            return
+
+        with self._state_lock:
+            self.state = VoiceSessionState.DISPATCHING
+
+        command_text = normalize_command_text(result.text)
+        command_text = self.router._remove_wake_phrase(command_text).strip()
+        if command_text:
+            provider_status = f"Command captured by {result.provider}"
+            if result.used_fallback and result.fallback_reason:
+                provider_status += f" (fallback: {result.fallback_reason})"
+            self._emit_status(provider_status)
+            self._emit_command(command_text)
+            self._emit_diagnostic(
+                stage="dispatch",
+                utterance_id=utterance_id,
+                provider=result.provider,
+                confidence=result.confidence_0_1,
+                latency_ms=result.latency_ms,
+                fallback_reason=result.fallback_reason or "none",
+                used_fallback=result.used_fallback,
+            )
+            self.telemetry.log(
+                "command_dispatch",
+                utterance_id=utterance_id,
+                provider=result.provider,
+                confidence=result.confidence_0_1,
+                latency_ms=result.latency_ms,
+                used_fallback=result.used_fallback,
+                fallback_reason=result.fallback_reason,
+                chars=len(command_text),
+            )
+        else:
+            self._emit_status("I heard audio, but couldn't transcribe a command. Please try again.")
+            self._emit_diagnostic(
+                stage="empty",
+                utterance_id=utterance_id,
+                provider=result.provider,
+                confidence=result.confidence_0_1,
+                latency_ms=result.latency_ms,
+            )
+            self.telemetry.log(
+                "command_empty",
+                utterance_id=utterance_id,
+                provider=result.provider,
+                confidence=result.confidence_0_1,
+                latency_ms=result.latency_ms,
+            )
+
+        with self._state_lock:
+            self.state = VoiceSessionState.COOLDOWN
+            self._cooldown_until = time.monotonic() + max(0.0, self._cooldown_seconds)
+            self.endpoint.reset()
+
+        self.telemetry.log("cooldown_started", utterance_id=utterance_id, seconds=self._cooldown_seconds)
+        self._emit_diagnostic(stage="cooldown", utterance_id=utterance_id, seconds=self._cooldown_seconds)
+        self._emit_partial("")
+
+        with self._state_lock:
+            self.state = VoiceSessionState.IDLE
+
+    def _handle_stream_error(self, message: str) -> None:
+        with self._state_lock:
+            self.state = VoiceSessionState.ERROR
+        self._emit_error(message)
+        self._emit_diagnostic(stage="stream_error", error=message)
+        self.telemetry.log("stream_error", error=message)
+        with self._state_lock:
+            self.state = VoiceSessionState.IDLE
+            self.endpoint.reset()
+            self._partial_preview_recognizer = None
+            self._last_partial_preview = ""
+            self._awaiting_continuation = False
+            self._continuation_deadline = 0.0
+
+    def _initialize_partial_preview_recognizer_locked(self) -> None:
+        if self.wake_mode == "openwakeword":
+            # openwakeword path might not have Vosk imported yet; preview is optional.
+            pass
+        try:
+            from vosk import KaldiRecognizer, Model
+
+            if self.model_path:
+                if not hasattr(self, "_preview_model") or self._preview_model is None:
+                    self._preview_model = Model(self.model_path)
+                self._partial_preview_recognizer = KaldiRecognizer(self._preview_model, self.sample_rate)
+        except Exception:
+            self._partial_preview_recognizer = None
+
+    def _emit_partial_preview(self, chunk: bytes) -> None:
+        with self._state_lock:
+            recognizer = self._partial_preview_recognizer
+            if recognizer is None:
+                return
+
+        try:
+            if recognizer.AcceptWaveform(chunk):
+                payload = json.loads(recognizer.Result())
+                preview = str(payload.get("text", "")).strip()
+            else:
+                payload = json.loads(recognizer.PartialResult())
+                preview = str(payload.get("partial", "")).strip()
+        except Exception:
+            return
+
+        if not preview:
+            return
+
+        normalized_preview = self.router._remove_wake_phrase(self.router._normalize(preview)).strip()
+        if not normalized_preview:
+            return
+
+        with self._state_lock:
+            if normalized_preview == self._last_partial_preview:
+                return
+            now = time.monotonic()
+            if (now - self._last_partial_emit_at) < max(0.0, self._partial_emit_interval_seconds):
+                return
+            self._last_partial_preview = normalized_preview
+            self._last_partial_emit_at = now
+
+        self._emit_partial(normalized_preview)
+
+    def _emit_partial(self, partial_text: str) -> None:
+        if self.on_partial:
+            self.on_partial(partial_text)
+
+    def _emit_diagnostic(self, **payload: Any) -> None:
+        if self.on_diagnostic:
+            self.on_diagnostic(payload)
+
+    def _in_cooldown_locked(self) -> bool:
+        if self._cooldown_until <= 0.0:
+            return False
+        now = time.monotonic()
+        if now < self._cooldown_until:
+            return True
+        self._cooldown_until = 0.0
+        return False
+
+    def _in_cooldown(self, now: float | None = None) -> bool:
+        with self._state_lock:
+            if self._cooldown_until <= 0.0:
+                return False
+            current = time.monotonic() if now is None else now
+            if current < self._cooldown_until:
+                return True
+            self._cooldown_until = 0.0
+            return False
 
     def _emit_status(self, message: str) -> None:
         if self.on_status:
