@@ -9,8 +9,8 @@ import re
 
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
-from PyQt5.QtCore import QDate, Qt, QThread, pyqtSignal
-from PyQt5.QtGui import QFont, QPalette, QColor
+from PyQt5.QtCore import QDate, QEvent, Qt, QThread, pyqtSignal
+from PyQt5.QtGui import QFont, QKeySequence, QPalette, QColor
 from PyQt5.QtWidgets import (
     QApplication,
     QAbstractItemView,
@@ -32,6 +32,7 @@ from PyQt5.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
+    QShortcut,
     QSizePolicy,
     QSplitter,
     QStatusBar,
@@ -120,6 +121,8 @@ class MainWindow(QMainWindow):
         self.repository = FinanceRepository()
         self.assistant_service = AssistantService(self.repository)
         self.voice_coordinator = VoiceCoordinator(wake_phrase="hey steven")
+        self._ui_scale = self._load_ui_scale_setting()
+        self._layout_base_metrics: dict[int, tuple[tuple[int, int, int, int], int]] = {}
         self.voice_enabled = False
         self._assistant_worker: AssistantWorker | None = None
         self._ollama_warmup_worker: OllamaWarmupWorker | None = None
@@ -163,6 +166,8 @@ class MainWindow(QMainWindow):
         self._build_assets_tab()
         self._build_assistant_tab()
         self._build_menu_bar()
+        self._capture_layout_base_metrics()
+        self._setup_ui_scale_controls()
 
         # Route all voice callbacks through Qt signals so UI updates always run on the main thread.
         self.voice_status_signal.connect(self._handle_voice_status)
@@ -182,8 +187,8 @@ class MainWindow(QMainWindow):
             available_models = self.assistant_service.client.list_available_models()
             if saved_model in available_models:
                 self.model_selector.setCurrentText(saved_model)
-        
-        self._apply_styles()
+
+        self._apply_ui_scale(persist=False, show_status=False)
         
         # Sync all recurring items with their transactions to fix any category mismatches
         sync_result = self.repository.sync_recurring_with_transactions()
@@ -198,10 +203,26 @@ class MainWindow(QMainWindow):
         self.refresh_all()
         self._warmup_ollama()
 
+    def _build_scrollable_tab_layout(self, tab: QWidget) -> QVBoxLayout:
+        outer_layout = QVBoxLayout(tab)
+        outer_layout.setContentsMargins(0, 0, 0, 0)
+        outer_layout.setSpacing(0)
+
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setFrameShape(QFrame.NoFrame)
+        outer_layout.addWidget(scroll_area)
+
+        content = QWidget()
+        scroll_area.setWidget(content)
+
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(24, 24, 24, 24)
+        content_layout.setSpacing(18)
+        return content_layout
+
     def _build_dashboard_tab(self) -> None:
-        layout = QVBoxLayout(self.dashboard_tab)
-        layout.setContentsMargins(24, 24, 24, 24)
-        layout.setSpacing(18)
+        layout = self._build_scrollable_tab_layout(self.dashboard_tab)
 
         header = QLabel("Personal Finance Command Center")
         header.setObjectName("PageTitle")
@@ -263,9 +284,7 @@ class MainWindow(QMainWindow):
         layout.addLayout(dashboard_actions)
 
     def _build_charts_tab(self) -> None:
-        layout = QVBoxLayout(self.charts_tab)
-        layout.setContentsMargins(24, 24, 24, 24)
-        layout.setSpacing(18)
+        layout = self._build_scrollable_tab_layout(self.charts_tab)
 
         title = QLabel("Monthly Charts")
         title.setObjectName("PageTitle")
@@ -365,9 +384,7 @@ class MainWindow(QMainWindow):
         return container
 
     def _build_recurring_tab(self) -> None:
-        layout = QVBoxLayout(self.recurring_tab)
-        layout.setContentsMargins(24, 24, 24, 24)
-        layout.setSpacing(18)
+        layout = self._build_scrollable_tab_layout(self.recurring_tab)
 
         title = QLabel("Recurring Budget Items")
         title.setObjectName("PageTitle")
@@ -492,9 +509,7 @@ class MainWindow(QMainWindow):
         return container
 
     def _build_ledger_tab(self) -> None:
-        layout = QVBoxLayout(self.ledger_tab)
-        layout.setContentsMargins(24, 24, 24, 24)
-        layout.setSpacing(18)
+        layout = self._build_scrollable_tab_layout(self.ledger_tab)
 
         title = QLabel("Ledger")
         title.setObjectName("PageTitle")
@@ -2755,9 +2770,7 @@ class MainWindow(QMainWindow):
             self.recurring_asset_link_combo.blockSignals(False)
 
     def _build_assistant_tab(self) -> None:
-        layout = QVBoxLayout(self.assistant_tab)
-        layout.setContentsMargins(24, 24, 24, 24)
-        layout.setSpacing(18)
+        layout = self._build_scrollable_tab_layout(self.assistant_tab)
 
         title = QLabel("Local AI Assistant")
         title.setObjectName("PageTitle")
@@ -2781,7 +2794,7 @@ class MainWindow(QMainWindow):
         self.model_selector = QComboBox()
         self.model_selector.currentTextChanged.connect(self._handle_model_changed)
         self._refresh_available_models()
-        refresh_models_btn = QPushButton("Γå╗ Refresh Models")
+        refresh_models_btn = QPushButton("Refresh Models")
         refresh_models_btn.setMaximumWidth(120)
         refresh_models_btn.clicked.connect(self._refresh_available_models)
         model_selector_row.addWidget(model_label)
@@ -2852,9 +2865,9 @@ class MainWindow(QMainWindow):
             self,
             "Import CSV data",
             "How do you want to import?\n\n"
-            "ΓÇó Yes  ΓÇö clear all existing data first, then import (full reset)\n"
-            "ΓÇó No   ΓÇö add imported data on top of existing data\n"
-            "ΓÇó Cancel ΓÇö abort",
+            "- Yes: clear all existing data first, then import (full reset)\n"
+            "- No: add imported data on top of existing data\n"
+            "- Cancel: abort",
             QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel,
             QMessageBox.Cancel,
         )
@@ -2874,9 +2887,150 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             QMessageBox.critical(self, "Import failed", str(exc))
 
+    def _load_ui_scale_setting(self) -> float:
+        raw_value = self.repository.get_setting("ui_scale", "1.00") or "1.00"
+        try:
+            parsed = float(raw_value)
+        except ValueError:
+            return 1.0
+        return self._clamp_ui_scale(parsed)
+
+    def _clamp_ui_scale(self, value: float) -> float:
+        return max(0.85, min(1.50, value))
+
+    def _setup_ui_scale_controls(self) -> None:
+        QApplication.instance().installEventFilter(self)
+
+        self._zoom_in_shortcut = QShortcut(QKeySequence("Ctrl++"), self)
+        self._zoom_in_shortcut.activated.connect(lambda: self._change_ui_scale(+0.05))
+
+        self._zoom_in_alt_shortcut = QShortcut(QKeySequence("Ctrl+="), self)
+        self._zoom_in_alt_shortcut.activated.connect(lambda: self._change_ui_scale(+0.05))
+
+        self._zoom_out_shortcut = QShortcut(QKeySequence("Ctrl+-"), self)
+        self._zoom_out_shortcut.activated.connect(lambda: self._change_ui_scale(-0.05))
+
+        self._zoom_reset_shortcut = QShortcut(QKeySequence("Ctrl+0"), self)
+        self._zoom_reset_shortcut.activated.connect(self._reset_ui_scale)
+
+    def eventFilter(self, watched: object, event: object) -> bool:
+        if (
+            isinstance(event, QEvent)
+            and event.type() == QEvent.Wheel
+            and QApplication.keyboardModifiers() & Qt.ControlModifier
+        ):
+            wheel_delta = event.angleDelta().y() if hasattr(event, "angleDelta") else 0
+            if wheel_delta > 0:
+                self._change_ui_scale(+0.05)
+            elif wheel_delta < 0:
+                self._change_ui_scale(-0.05)
+            return True
+        return super().eventFilter(watched, event)
+
+    def _reset_ui_scale(self) -> None:
+        self._ui_scale = 1.0
+        self._apply_ui_scale(persist=True, show_status=True)
+
+    def _change_ui_scale(self, delta: float) -> None:
+        new_scale = self._clamp_ui_scale(self._ui_scale + delta)
+        if abs(new_scale - self._ui_scale) < 0.001:
+            return
+        self._ui_scale = new_scale
+        self._apply_ui_scale(persist=True, show_status=True)
+
+    def _apply_ui_scale(self, persist: bool, show_status: bool) -> None:
+        self._apply_styles()
+        self._apply_layout_scale()
+        if persist:
+            self.repository.set_setting("ui_scale", f"{self._ui_scale:.2f}")
+        if show_status:
+            self.status_bar.showMessage(f"UI scale: {int(round(self._ui_scale * 100))}%", 2500)
+
+    def _capture_layout_base_metrics(self) -> None:
+        self._layout_base_metrics.clear()
+        seen_layout_ids: set[int] = set()
+        for widget in self.findChildren(QWidget):
+            layout = widget.layout()
+            if layout is None:
+                continue
+            stack = [layout]
+            while stack:
+                current_layout = stack.pop()
+                layout_id = id(current_layout)
+                if layout_id in seen_layout_ids:
+                    continue
+                seen_layout_ids.add(layout_id)
+
+                margins = current_layout.contentsMargins()
+                self._layout_base_metrics[layout_id] = (
+                    (margins.left(), margins.top(), margins.right(), margins.bottom()),
+                    current_layout.spacing(),
+                )
+
+                for item_index in range(current_layout.count()):
+                    child_item = current_layout.itemAt(item_index)
+                    child_layout = child_item.layout()
+                    if child_layout is not None:
+                        stack.append(child_layout)
+                    child_widget = child_item.widget()
+                    if child_widget is not None and child_widget.layout() is not None:
+                        stack.append(child_widget.layout())
+
+    def _apply_layout_scale(self) -> None:
+        scale = self._ui_scale
+        seen_layout_ids: set[int] = set()
+        for widget in self.findChildren(QWidget):
+            layout = widget.layout()
+            if layout is None:
+                continue
+            stack = [layout]
+            while stack:
+                current_layout = stack.pop()
+                layout_id = id(current_layout)
+                if layout_id in seen_layout_ids:
+                    continue
+                seen_layout_ids.add(layout_id)
+
+                base_metrics = self._layout_base_metrics.get(layout_id)
+                if base_metrics is not None:
+                    base_margins, base_spacing = base_metrics
+                    current_layout.setContentsMargins(
+                        max(0, int(round(base_margins[0] * scale))),
+                        max(0, int(round(base_margins[1] * scale))),
+                        max(0, int(round(base_margins[2] * scale))),
+                        max(0, int(round(base_margins[3] * scale))),
+                    )
+                    if base_spacing >= 0:
+                        current_layout.setSpacing(max(0, int(round(base_spacing * scale))))
+
+                for item_index in range(current_layout.count()):
+                    child_item = current_layout.itemAt(item_index)
+                    child_layout = child_item.layout()
+                    if child_layout is not None:
+                        stack.append(child_layout)
+                    child_widget = child_item.widget()
+                    if child_widget is not None and child_widget.layout() is not None:
+                        stack.append(child_widget.layout())
+
     def _apply_styles(self) -> None:
+        scale = self._ui_scale
+        font_size = max(9, int(round(10 * scale)))
+        page_title_size = max(20, int(round(26 * scale)))
+        subtitle_size = max(10, int(round(11 * scale)))
+        section_title_size = max(12, int(round(15 * scale)))
+        metric_value_size = max(16, int(round(22 * scale)))
+        radius_large = max(10, int(round(18 * scale)))
+        radius_medium = max(8, int(round(12 * scale)))
+        tab_padding_y = max(8, int(round(12 * scale)))
+        tab_padding_x = max(12, int(round(18 * scale)))
+        control_padding = max(7, int(round(10 * scale)))
+        button_padding_y = max(8, int(round(12 * scale)))
+        button_padding_x = max(12, int(round(16 * scale)))
+        header_padding = max(7, int(round(10 * scale)))
+        scroll_handle_size = max(18, int(round(24 * scale)))
+
         font = QFont("Segoe UI")
-        font.setPointSize(10)
+        font.setPointSize(font_size)
 
         app = QApplication.instance()
         app.setFont(font)
@@ -2901,7 +3055,7 @@ class MainWindow(QMainWindow):
             QWidget {
                 color: #e7edf7;
                 font-family: 'Segoe UI';
-                font-size: 10pt;
+                font-size: %dpt;
                 background: #0a1018;
             }
             QMainWindow {
@@ -2914,33 +3068,33 @@ class MainWindow(QMainWindow):
             QTabBar::tab {
                 background: #101826;
                 color: #9fb0c7;
-                padding: 12px 18px;
+                padding: %dpx %dpx;
                 margin-right: 6px;
-                border-top-left-radius: 10px;
-                border-top-right-radius: 10px;
+                border-top-left-radius: %dpx;
+                border-top-right-radius: %dpx;
             }
             QTabBar::tab:selected {
                 background: #172233;
                 color: #ffffff;
             }
             QLabel#PageTitle {
-                font-size: 26pt;
+                font-size: %dpt;
                 font-weight: 700;
                 color: #f5f8ff;
             }
             QLabel#PageSubtitle {
-                font-size: 11pt;
+                font-size: %dpt;
                 color: #90a4bf;
             }
             QLabel#SectionTitle {
-                font-size: 15pt;
+                font-size: %dpt;
                 font-weight: 600;
                 color: #f5f8ff;
             }
             QFrame#Panel, QFrame#MetricCard {
                 background: #111a27;
                 border: 1px solid #1e2b3f;
-                border-radius: 18px;
+                border-radius: %dpx;
             }
             QLabel#MetricCardTitle {
                 color: #90a4bf;
@@ -2949,15 +3103,15 @@ class MainWindow(QMainWindow):
             }
             QLabel#MetricCardValue {
                 color: #ffffff;
-                font-size: 22pt;
+                font-size: %dpt;
                 font-weight: 700;
             }
             QLineEdit, QDoubleSpinBox, QDateEdit, QComboBox, QTextEdit, QTableWidget {
                 background: #0d1520;
                 color: #e7edf7;
                 border: 1px solid #233247;
-                border-radius: 12px;
-                padding: 10px;
+                border-radius: %dpx;
+                padding: %dpx;
                 selection-background-color: #2ec4b6;
             }
             QLineEdit:disabled, QDoubleSpinBox:disabled, QDateEdit:disabled, QComboBox:disabled, QTextEdit:disabled {
@@ -2988,8 +3142,8 @@ class MainWindow(QMainWindow):
                 background: #2ec4b6;
                 color: #041012;
                 border: none;
-                border-radius: 12px;
-                padding: 12px 16px;
+                border-radius: %dpx;
+                padding: %dpx %dpx;
                 font-weight: 700;
             }
             QPushButton:hover {
@@ -3001,7 +3155,7 @@ class MainWindow(QMainWindow):
             QHeaderView::section {
                 background: #172233;
                 color: #cbd6e8;
-                padding: 10px;
+                padding: %dpx;
                 border: none;
             }
             QTableWidget {
@@ -3015,8 +3169,8 @@ class MainWindow(QMainWindow):
             QScrollBar::handle:vertical, QScrollBar::handle:horizontal {
                 background: #233247;
                 border-radius: 6px;
-                min-height: 24px;
-                min-width: 24px;
+                min-height: %dpx;
+                min-width: %dpx;
             }
             QScrollBar::add-line, QScrollBar::sub-line {
                 background: none;
@@ -3033,6 +3187,26 @@ class MainWindow(QMainWindow):
                 background: #09111a;
             }
             """
+            % (
+                font_size,
+                tab_padding_y,
+                tab_padding_x,
+                max(8, int(round(10 * scale))),
+                max(8, int(round(10 * scale))),
+                page_title_size,
+                subtitle_size,
+                section_title_size,
+                radius_large,
+                metric_value_size,
+                radius_medium,
+                control_padding,
+                radius_medium,
+                button_padding_y,
+                button_padding_x,
+                header_padding,
+                scroll_handle_size,
+                scroll_handle_size,
+            )
         )
 
     def refresh_all(self) -> None:
@@ -3912,10 +4086,10 @@ class MainWindow(QMainWindow):
                 continue
 
             # Bullet list support
-            if re.match(r"^\s*[-*ΓÇó]\s+", line):
+            if re.match(r"^\s*[-*]\s+", line):
                 bullet_lines: list[str] = []
-                while i < len(lines) and re.match(r"^\s*[-*ΓÇó]\s+", lines[i]):
-                    item_text = re.sub(r"^\s*[-*ΓÇó]\s+", "", lines[i].strip())
+                while i < len(lines) and re.match(r"^\s*[-*]\s+", lines[i]):
+                    item_text = re.sub(r"^\s*[-*]\s+", "", lines[i].strip())
                     bullet_lines.append(item_text)
                     i += 1
 
