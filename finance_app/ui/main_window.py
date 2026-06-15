@@ -9,7 +9,7 @@ import re
 
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
-from PyQt5.QtCore import QDate, QEvent, Qt, QThread, pyqtSignal
+from PyQt5.QtCore import QDate, QEvent, Qt, pyqtSignal
 from PyQt5.QtGui import QFont, QKeySequence, QPalette, QColor
 from PyQt5.QtWidgets import (
     QApplication,
@@ -50,66 +50,14 @@ from finance_app.models import Asset, AssistantResult, Transaction
 from finance_app.services.assistant_service import AssistantService
 from finance_app.services.voice_pipeline import VoiceCoordinator
 from finance_app.storage import FinanceRepository
-
-
-class AssistantWorker(QThread):
-    result_ready = pyqtSignal(object)
-    failed = pyqtSignal(str)
-
-    def __init__(self, assistant_service: AssistantService, prompt_text: str) -> None:
-        super().__init__()
-        self.assistant_service = assistant_service
-        self.prompt_text = prompt_text
-
-    def run(self) -> None:
-        try:
-            result = self.assistant_service.handle_prompt(self.prompt_text)
-        except Exception as exc:  # pragma: no cover - surface to the UI
-            self.failed.emit(str(exc))
-            return
-        self.result_ready.emit(result)
-
-
-class OllamaWarmupWorker(QThread):
-    ready = pyqtSignal()
-    failed = pyqtSignal(str)
-
-    def __init__(self, assistant_service: AssistantService) -> None:
-        super().__init__()
-        self.assistant_service = assistant_service
-
-    def run(self) -> None:
-        try:
-            self.assistant_service.client.ensure_running()
-        except Exception as exc:  # pragma: no cover - surface to the UI
-            self.failed.emit(str(exc))
-            return
-        self.ready.emit()
-
-
-class MetricCard(QFrame):
-    def __init__(self, title: str, value: str) -> None:
-        super().__init__()
-        self.setObjectName("MetricCard")
-        self.title_label = QLabel(title)
-        self.title_label.setObjectName("MetricCardTitle")
-        self.value_label = QLabel(value)
-        self.value_label.setObjectName("MetricCardValue")
-        self.value_label.setProperty("tone", "default")
-
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(18, 16, 18, 16)
-        layout.setSpacing(6)
-        layout.addWidget(self.title_label)
-        layout.addWidget(self.value_label)
-
-    def set_value(self, value: str, is_warning: bool = False) -> None:
-        self.value_label.setText(value)
-        tone = "warning" if is_warning else "default"
-        self.value_label.setProperty("tone", tone)
-        style = self.value_label.style()
-        style.unpolish(self.value_label)
-        style.polish(self.value_label)
+from finance_app.ui.controllers.app_controller import AppController
+from finance_app.ui.controllers.analytics_controller import AnalyticsController
+from finance_app.ui.controllers.assets_controller import AssetsController
+from finance_app.ui.controllers.budget_controller import BudgetController
+from finance_app.ui.controllers.category_controller import CategoryController
+from finance_app.ui.controllers.recurring_controller import RecurringController
+from finance_app.ui.controllers.transaction_controller import TransactionController
+from finance_app.ui.support import AssistantWorker, MetricCard, OllamaWarmupWorker
 
 
 class MainWindow(QMainWindow):
@@ -121,6 +69,13 @@ class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.repository = FinanceRepository()
+        self.app_controller = AppController(self.repository)
+        self.analytics_controller = AnalyticsController(self.repository)
+        self.assets_controller = AssetsController(self.repository)
+        self.budget_controller = BudgetController(self.repository)
+        self.category_controller = CategoryController(self.repository)
+        self.recurring_controller = RecurringController(self.repository)
+        self.transaction_controller = TransactionController(self.repository)
         self.assistant_service = AssistantService(self.repository)
         self.voice_coordinator = VoiceCoordinator(wake_phrase="hey steven")
         self._ui_scale = self._load_ui_scale_setting()
@@ -187,7 +142,7 @@ class MainWindow(QMainWindow):
         self.voice_coordinator.on_command = self.voice_command_signal.emit
         
         # Load saved model preference
-        saved_model = self.repository.get_setting("selected_model")
+        saved_model = self.app_controller.get_setting("selected_model")
         if saved_model:
             self.assistant_service.client.set_model(saved_model)
             available_models = self.assistant_service.client.list_available_models()
@@ -197,7 +152,7 @@ class MainWindow(QMainWindow):
         self._apply_ui_scale(persist=False, show_status=False)
         
         # Sync all recurring items with their transactions to fix any category mismatches
-        sync_result = self.repository.sync_recurring_with_transactions()
+        sync_result = self.app_controller.sync_recurring_with_transactions()
         if sync_result["total_synced"] > 0:
             self.status_bar.showMessage(
                 f"Fixed {sync_result['total_synced']} transaction categories to match recurring items.",
@@ -763,14 +718,14 @@ class MainWindow(QMainWindow):
 
         selected_month = int(self.budget_month_toggle.currentData())
         selected_year = int(self.budget_year_toggle.currentData())
-        self.repository.set_monthly_savings_goal(selected_year, selected_month, self.savings_goal_input.value())
+        self.budget_controller.set_monthly_savings_goal(selected_year, selected_month, self.savings_goal_input.value())
         self.refresh_budget()
 
     def _load_savings_goal_for_selected_period(self) -> None:
         """Load persisted monthly savings goal into the UI for the selected period."""
         selected_month = int(self.budget_month_toggle.currentData())
         selected_year = int(self.budget_year_toggle.currentData())
-        saved_goal = self.repository.get_monthly_savings_goal(selected_year, selected_month, default=0.0)
+        saved_goal = self.budget_controller.get_monthly_savings_goal(selected_year, selected_month, default=0.0)
 
         self._is_loading_budget_goal = True
         self.savings_goal_input.blockSignals(True)
@@ -785,51 +740,37 @@ class MainWindow(QMainWindow):
 
         selected_month = int(self.budget_month_toggle.currentData())
         selected_year = int(self.budget_year_toggle.currentData())
-
-        # Get projected recurring totals
-        total_income, recurring_expenses = self.repository.get_projected_recurring_totals_for_month(selected_year, selected_month)
-
-        # Split budget rows so recurring auto-allocations are not counted twice in summary insights.
-        budgets = self.repository.list_budgets_for_month(selected_year, selected_month, kind="expense")
-        recurring_budget_rows = [b for b in budgets if b.notes == "Recurring item (auto-allocated)"]
-        discretionary_budget_rows = [b for b in budgets if b.notes != "Recurring item (auto-allocated)"]
-        budgeted_discretionary = sum(b.budgeted_amount for b in discretionary_budget_rows)
-        actual_discretionary = sum(b.actual_spent for b in discretionary_budget_rows)
-
-        # Calculate key metrics
-        total_expected_spend = recurring_expenses + budgeted_discretionary
-        
         savings_goal = self.savings_goal_input.value()
-        
-        # Expected net this month = income - savings goal - expected spend
-        # But if savings goal > income, remaining should show negative
-        discretionary_after_savings = total_income - savings_goal - recurring_expenses
-        
-        # Remaining to spend = what's left in discretionary budget after expenses so far
-        remaining_to_spend = discretionary_after_savings - actual_discretionary
-        break_even_left_to_spend = total_income - recurring_expenses - actual_discretionary
-
-        overspent_count = sum(1 for b in budgets if b.remaining < 0)
-        under_budget_count = sum(1 for b in budgets if b.remaining > 0)
+        month_view = self.budget_controller.build_budget_month_view(selected_year, selected_month, savings_goal)
+        budgets = month_view.budgets
 
         # Update insight cards
-        self._set_metric_value(self.budget_income_insight, total_income)
-        self._set_metric_value(self.budget_total_spend_insight, total_expected_spend)
-        self._set_metric_value(self.budget_net_on_target, break_even_left_to_spend, is_warning=break_even_left_to_spend < 0)
+        self._set_metric_value(self.budget_income_insight, month_view.total_income)
+        self._set_metric_value(self.budget_total_spend_insight, month_view.total_expected_spend)
+        self._set_metric_value(
+            self.budget_net_on_target,
+            month_view.break_even_left_to_spend,
+            is_warning=month_view.break_even_left_to_spend < 0,
+        )
         self._set_metric_value(self.budget_savings_goal_card, savings_goal)
-        
-        # Expected net = income - recurring expenses - discretionary budget - savings goal.
-        expected_net = total_income - recurring_expenses - budgeted_discretionary - savings_goal
-        if expected_net < 0:
+
+        if month_view.expected_net < 0:
             # Show in red/warning color
-            self._set_metric_value(self.budget_expected_net, expected_net, is_warning=True)
+            self._set_metric_value(self.budget_expected_net, month_view.expected_net, is_warning=True)
         else:
-            self._set_metric_value(self.budget_expected_net, expected_net)
-        
+            self._set_metric_value(self.budget_expected_net, month_view.expected_net)
+
         # Remaining to spend in budget
-        self._set_metric_value(self.budget_remaining_to_spend, remaining_to_spend, is_warning=remaining_to_spend < 0)
-        self.budget_overspent_count_card.set_value(str(overspent_count), is_warning=overspent_count > 0)
-        self.budget_under_budget_count_card.set_value(str(under_budget_count))
+        self._set_metric_value(
+            self.budget_remaining_to_spend,
+            month_view.remaining_to_spend,
+            is_warning=month_view.remaining_to_spend < 0,
+        )
+        self.budget_overspent_count_card.set_value(
+            str(month_view.overspent_count),
+            is_warning=month_view.overspent_count > 0,
+        )
+        self.budget_under_budget_count_card.set_value(str(month_view.under_budget_count))
         self._update_budget_goal_status(selected_year, selected_month, savings_goal)
 
         # Populate budget table
@@ -968,7 +909,7 @@ class MainWindow(QMainWindow):
         else:
             elapsed_days = 0
 
-        snapshot = self.repository.snapshot_for_month(year, month)
+        snapshot = self.budget_controller.snapshot_for_month(year, month)
         actual_net = snapshot.net_total
 
         if savings_goal <= 0:
@@ -1017,8 +958,8 @@ class MainWindow(QMainWindow):
         if not file_path:
             return
 
-        budgets = self.repository.list_budgets_for_month(selected_year, selected_month)
-        if not budgets:
+        rows = self.budget_controller.export_budget_rows_for_month(selected_year, selected_month)
+        if not rows:
             QMessageBox.information(self, APP_NAME, "No budget entries for this month to export.")
             return
 
@@ -1029,17 +970,8 @@ class MainWindow(QMainWindow):
                     fieldnames=["year", "month", "category", "kind", "budgeted_amount", "notes"],
                 )
                 writer.writeheader()
-                for budget in budgets:
-                    writer.writerow(
-                        {
-                            "year": selected_year,
-                            "month": selected_month,
-                            "category": budget.category,
-                            "kind": budget.kind,
-                            "budgeted_amount": f"{budget.budgeted_amount:.2f}",
-                            "notes": budget.notes,
-                        }
-                    )
+                for row in rows:
+                    writer.writerow(row)
 
             self.status_bar.showMessage(f"Exported budget month CSV to {file_path}", 4000)
         except Exception as exc:
@@ -1069,42 +1001,17 @@ class MainWindow(QMainWindow):
         if reply == QMessageBox.Cancel:
             return
 
-        if reply == QMessageBox.Yes:
-            existing_rows = self.repository.list_budgets_for_month(selected_year, selected_month)
-            for budget in existing_rows:
-                if budget.id is not None:
-                    self.repository.delete_budget(budget.id)
-
-        imported_count = 0
-        skipped_count = 0
         try:
             with open(file_path, "r", newline="", encoding="utf-8") as csv_file:
                 reader = csv.DictReader(csv_file)
-                for row in reader:
-                    category = str(row.get("category", "")).strip()
-                    kind = str(row.get("kind", "expense")).strip().lower() or "expense"
-                    notes = str(row.get("notes", "")).strip()
+                rows = list(reader)
 
-                    raw_amount = str(row.get("budgeted_amount", "")).strip().replace("$", "").replace(",", "")
-                    try:
-                        amount = float(raw_amount)
-                    except ValueError:
-                        skipped_count += 1
-                        continue
-
-                    if not category or amount <= 0 or kind not in ("expense", "income"):
-                        skipped_count += 1
-                        continue
-
-                    self.repository.add_or_update_budget(
-                        year=selected_year,
-                        month=selected_month,
-                        category=category,
-                        kind=kind,
-                        budgeted_amount=amount,
-                        notes=notes,
-                    )
-                    imported_count += 1
+            imported_count, skipped_count = self.budget_controller.import_budget_rows_for_month(
+                year=selected_year,
+                month=selected_month,
+                rows=rows,
+                replace_existing=(reply == QMessageBox.Yes),
+            )
 
             self.refresh_budget()
             self.status_bar.showMessage(
@@ -1153,7 +1060,7 @@ class MainWindow(QMainWindow):
         category = category_item.text().strip()
         notes = notes_item.text().strip() if notes_item else ""
 
-        self.repository.add_or_update_budget(
+        self.budget_controller.add_or_update_budget(
             year=selected_year,
             month=selected_month,
             category=category,
@@ -1171,10 +1078,10 @@ class MainWindow(QMainWindow):
         self.new_budget_category.clear()
 
         # Get all expense categories
-        all_categories = self.repository.list_categories(kind="expense")
+        all_categories = self.budget_controller.list_expense_categories()
 
         # Get already-budgeted categories
-        existing_budgets = self.repository.list_budgets_for_month(year, month, kind="expense")
+        existing_budgets = self.budget_controller.list_budgets_for_month(year, month, kind="expense")
         budgeted_categories = {b.category for b in existing_budgets}
 
         # Add categories that aren't already budgeted
@@ -1201,7 +1108,7 @@ class MainWindow(QMainWindow):
         selected_month = int(self.budget_month_toggle.currentData())
         selected_year = int(self.budget_year_toggle.currentData())
 
-        self.repository.add_or_update_budget(
+        self.budget_controller.add_or_update_budget(
             year=selected_year,
             month=selected_month,
             category=category,
@@ -1247,7 +1154,7 @@ class MainWindow(QMainWindow):
             self, APP_NAME, f"Delete budget for {category_name}?", QMessageBox.Yes | QMessageBox.No
         )
         if reply == QMessageBox.Yes:
-            self.repository.delete_budget(budget_id)
+            self.budget_controller.delete_budget(budget_id)
             self.status_bar.showMessage(f"Deleted budget for {category_name}.", 3000)
             self.refresh_budget()
 
@@ -1444,7 +1351,7 @@ class MainWindow(QMainWindow):
 
     def _open_reallocation_audit_history_dialog(self) -> None:
         """Display saved AI reallocation plans with filters, export, and rich detail view."""
-        audits = self.repository.list_budget_reallocation_audits(limit=100)
+        audits = self.budget_controller.list_budget_reallocation_audits(limit=100)
         if not audits:
             QMessageBox.information(self, APP_NAME, "No AI reallocation history found yet.")
             return
@@ -1741,7 +1648,7 @@ class MainWindow(QMainWindow):
 
         self.category_mgr_expense_list = QListWidget()
         self.category_mgr_expense_list.setSelectionMode(QAbstractItemView.SingleSelection)
-        expense_categories = self.repository.list_categories(kind="expense")
+        expense_categories = self.category_controller.list_categories(kind="expense")
         for cat in sorted(expense_categories, key=lambda c: c.name):
             self.category_mgr_expense_list.addItem(cat.name)
         expense_layout.addWidget(self.category_mgr_expense_list, 1)
@@ -1777,7 +1684,7 @@ class MainWindow(QMainWindow):
 
         self.category_mgr_income_list = QListWidget()
         self.category_mgr_income_list.setSelectionMode(QAbstractItemView.SingleSelection)
-        income_categories = self.repository.list_categories(kind="income")
+        income_categories = self.category_controller.list_categories(kind="income")
         for cat in sorted(income_categories, key=lambda c: c.name):
             self.category_mgr_income_list.addItem(cat.name)
         income_layout.addWidget(self.category_mgr_income_list, 1)
@@ -1821,13 +1728,12 @@ class MainWindow(QMainWindow):
             return
 
         # Check if category already exists
-        existing = self.repository.list_categories(kind=kind)
-        if any(cat.name.lower() == category_name.lower() for cat in existing):
+        if self.category_controller.category_exists(kind=kind, category_name=category_name):
             QMessageBox.warning(self, APP_NAME, f"Category '{category_name}' already exists.")
             return
 
         # Add the category
-        self.repository.ensure_category(category_name, kind)
+        self.category_controller.ensure_category(category_name, kind)
         list_widget.addItem(category_name)
         list_widget.sortItems()
         input_field.clear()
@@ -1856,7 +1762,7 @@ class MainWindow(QMainWindow):
         )
 
         if reply == QMessageBox.Yes:
-            success = self.repository.delete_category(category_name, kind)
+            success = self.category_controller.delete_category(category_name, kind)
             if success:
                 list_widget.takeItem(list_widget.row(current_item))
                 self.status_bar.showMessage(f"Deleted category: {category_name}", 3000)
@@ -2175,7 +2081,7 @@ class MainWindow(QMainWindow):
                 return
             asset_type = type_combo.currentText().strip().lower()
             is_house = asset_type == "house"
-            asset_id = self.repository.add_asset(
+            asset_id = self.assets_controller.add_asset(
                 name=name,
                 asset_type=asset_type,
                 house_value=add_house_value.value() if is_house else 0.0,
@@ -2207,7 +2113,7 @@ class MainWindow(QMainWindow):
             return
 
         self._selected_asset_id = int(asset_id)
-        asset = self.repository.get_asset_by_id(self._selected_asset_id)
+        asset = self.assets_controller.get_asset_by_id(self._selected_asset_id)
         if asset is None:
             self._show_empty_asset_state()
             return
@@ -2292,11 +2198,11 @@ class MainWindow(QMainWindow):
     def _save_selected_asset_details(self) -> None:
         if self._selected_asset_id is None:
             return
-        asset = self.repository.get_asset_by_id(self._selected_asset_id)
+        asset = self.assets_controller.get_asset_by_id(self._selected_asset_id)
         if asset is None:
             return
 
-        updated = self.repository.update_asset(
+        updated = self.assets_controller.update_asset(
             asset_id=self._selected_asset_id,
             name=asset.name,
             asset_type=asset.asset_type,
@@ -2323,7 +2229,7 @@ class MainWindow(QMainWindow):
 
     def _cancel_asset_edit(self) -> None:
         if self._selected_asset_id is not None:
-            asset = self.repository.get_asset_by_id(self._selected_asset_id)
+            asset = self.assets_controller.get_asset_by_id(self._selected_asset_id)
             if asset:
                 self._populate_asset_details(asset)
                 return
@@ -2348,14 +2254,14 @@ class MainWindow(QMainWindow):
     def _delete_selected_asset(self) -> None:
         if self._selected_asset_id is None:
             return
-        if self.repository.delete_asset(self._selected_asset_id):
+        if self.assets_controller.delete_asset(self._selected_asset_id):
             self._selected_asset_id = None
             self.refresh_assets()
 
     def _record_investment_value_snapshot(self) -> None:
         if self._selected_asset_id is None:
             return
-        asset = self.repository.get_asset_by_id(self._selected_asset_id)
+        asset = self.assets_controller.get_asset_by_id(self._selected_asset_id)
         if asset is None or asset.asset_type != "investment":
             return
 
@@ -2364,7 +2270,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, APP_NAME, "Current value must be zero or greater.")
             return
 
-        saved = self.repository.record_investment_value_snapshot(
+        saved = self.assets_controller.record_investment_value_snapshot(
             asset_id=int(self._selected_asset_id),
             value=value,
             valued_on=self._qdate_to_date(self.investment_valuation_date.date()),
@@ -2383,7 +2289,7 @@ class MainWindow(QMainWindow):
             self.investment_snapshots_table.setRowCount(0)
             return
 
-        snapshots = self.repository.list_asset_value_snapshots(int(asset_id), limit=24)
+        snapshots = self.assets_controller.list_asset_value_snapshots(int(asset_id), limit=24)
         self.investment_snapshots_table.setRowCount(len(snapshots))
         for row_index, snapshot in enumerate(snapshots):
             cells = [
@@ -2406,7 +2312,7 @@ class MainWindow(QMainWindow):
                 self.asset_recurring_link_combo.clear()
             return
 
-        links = self.repository.list_asset_expense_links(asset_id)
+        links = self.assets_controller.list_asset_expense_links(asset_id)
         self.asset_linked_expenses_table.setRowCount(len(links))
         for row_index, link in enumerate(links):
             source_label = "One-Time" if link["source_type"] == "transaction" else "Recurring"
@@ -2424,13 +2330,13 @@ class MainWindow(QMainWindow):
 
         if hasattr(self, "asset_tx_link_combo"):
             self.asset_tx_link_combo.clear()
-            for transaction in self.repository.list_unlinked_expense_transactions(limit=300):
+            for transaction in self.assets_controller.list_unlinked_expense_transactions(limit=300):
                 label = f"{transaction.occurred_on.isoformat()} | {transaction.category} | {transaction.description} | ${transaction.amount:,.2f}"
                 self.asset_tx_link_combo.addItem(label, int(transaction.id))
 
         if hasattr(self, "asset_recurring_link_combo"):
             self.asset_recurring_link_combo.clear()
-            for recurring_item in self.repository.list_unlinked_recurring_expenses():
+            for recurring_item in self.assets_controller.list_unlinked_recurring_expenses():
                 label = f"{recurring_item.category} | {recurring_item.description} | ${recurring_item.amount:,.2f}"
                 self.asset_recurring_link_combo.addItem(label, int(recurring_item.id))
 
@@ -2441,7 +2347,7 @@ class MainWindow(QMainWindow):
         if tx_id is None:
             return
         try:
-            self.repository.link_expense_to_asset(self._selected_asset_id, "transaction", int(tx_id))
+            self.assets_controller.link_expense_to_asset(self._selected_asset_id, "transaction", int(tx_id))
             self.refresh_assets(select_asset_id=self._selected_asset_id)
         except Exception:
             QMessageBox.warning(self, APP_NAME, "Could not link selected one-time expense.")
@@ -2453,7 +2359,7 @@ class MainWindow(QMainWindow):
         if recurring_id is None:
             return
         try:
-            self.repository.link_expense_to_asset(self._selected_asset_id, "recurring", int(recurring_id))
+            self.assets_controller.link_expense_to_asset(self._selected_asset_id, "recurring", int(recurring_id))
             self.refresh_assets(select_asset_id=self._selected_asset_id)
         except Exception:
             QMessageBox.warning(self, APP_NAME, "Could not link selected recurring expense.")
@@ -2466,13 +2372,13 @@ class MainWindow(QMainWindow):
         if link_item is None:
             return
         link_id = int(link_item.data(Qt.UserRole))
-        self.repository.unlink_expense_from_asset(link_id)
+        self.assets_controller.unlink_expense_from_asset(link_id)
         self.refresh_assets(select_asset_id=self._selected_asset_id)
 
     def _build_asset_payment_events(self, asset: Asset) -> list[dict[str, object]]:
         if asset.id is None:
             return []
-        links = self.repository.list_asset_expense_links(asset.id)
+        links = self.assets_controller.list_asset_expense_links(asset.id)
         events: list[dict[str, object]] = []
         for link in links:
             amount = float(link["amount"])
@@ -2736,13 +2642,13 @@ class MainWindow(QMainWindow):
         return date(year, month, day)
 
     def refresh_assets(self, select_asset_id: int | None = None) -> None:
-        overview = self.repository.assets_overview()
+        overview = self.assets_controller.assets_overview()
         self._set_metric_value(self.assets_total_net_worth_card, overview["total_net_worth"], is_warning=overview["total_net_worth"] < 0)
         self._set_metric_value(self.assets_total_value_card, overview["total_value"])
         self._set_metric_value(self.assets_total_debt_card, overview["total_debt"])
         self._set_metric_value(self.assets_total_invested_card, overview["total_invested"])
 
-        assets = self.repository.list_assets()
+        assets = self.assets_controller.list_assets()
         self._is_refreshing_asset_selector = True
         self.asset_selector_combo.clear()
         for asset in assets:
@@ -2766,7 +2672,7 @@ class MainWindow(QMainWindow):
         self._refresh_asset_link_entry_controls()
 
     def _refresh_asset_link_entry_controls(self) -> None:
-        assets = self.repository.list_assets()
+        assets = self.assets_controller.list_assets()
 
         if hasattr(self, "expense_asset_link_combo"):
             previous_data = self.expense_asset_link_combo.currentData() if self.expense_asset_link_combo.count() > 0 else None
@@ -2886,7 +2792,7 @@ class MainWindow(QMainWindow):
         if not directory:
             return
         try:
-            counts = self.repository.export_to_csv(directory)
+            counts = self.app_controller.export_to_csv(directory)
             summary = "\n".join(f"  {table}: {n} rows" for table, n in counts.items())
             QMessageBox.information(
                 self,
@@ -2921,7 +2827,7 @@ class MainWindow(QMainWindow):
 
         clear_first = reply == QMessageBox.Yes
         try:
-            counts = self.repository.import_from_csv(directory, clear_first=clear_first)
+            counts = self.app_controller.import_from_csv(directory, clear_first=clear_first)
             if not counts:
                 QMessageBox.information(self, "Import", "No CSV files found in the selected directory.")
                 return
@@ -2933,7 +2839,7 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Import failed", str(exc))
 
     def _load_ui_scale_setting(self) -> float:
-        raw_value = self.repository.get_setting("ui_scale", "1.00") or "1.00"
+        raw_value = self.app_controller.get_setting("ui_scale", "1.00") or "1.00"
         try:
             parsed = float(raw_value)
         except ValueError:
@@ -2941,7 +2847,7 @@ class MainWindow(QMainWindow):
         return self._clamp_ui_scale(parsed)
 
     def _load_ui_density_setting(self) -> str:
-        saved_mode = (self.repository.get_setting("ui_density", "comfortable") or "comfortable").strip().lower()
+        saved_mode = (self.app_controller.get_setting("ui_density", "comfortable") or "comfortable").strip().lower()
         return saved_mode if saved_mode in {"compact", "comfortable", "spacious"} else "comfortable"
 
     def _clamp_ui_scale(self, value: float) -> float:
@@ -2991,7 +2897,7 @@ class MainWindow(QMainWindow):
         self._apply_styles()
         self._apply_layout_scale()
         if persist:
-            self.repository.set_setting("ui_scale", f"{self._ui_scale:.2f}")
+            self.app_controller.set_setting("ui_scale", f"{self._ui_scale:.2f}")
         if show_status:
             self.status_bar.showMessage(f"UI scale: {int(round(self._ui_scale * 100))}%", 2500)
 
@@ -3043,7 +2949,7 @@ class MainWindow(QMainWindow):
         self._density_mode = normalized
         self._apply_ui_scale(persist=False, show_status=False)
         if persist:
-            self.repository.set_setting("ui_density", self._density_mode)
+            self.app_controller.set_setting("ui_density", self._density_mode)
         self._refresh_density_actions()
         if show_status:
             self.status_bar.showMessage(f"Density: {self._density_mode.title()}", 2500)
@@ -3378,6 +3284,8 @@ class MainWindow(QMainWindow):
         )
 
     def refresh_all(self) -> None:
+        # Materialize due recurring entries once per full refresh cycle.
+        self.app_controller.materialize_due_recurring_items()
         self.refresh_category_controls()
         self.refresh_recurring_category_controls()
         self.refresh_dashboard()
@@ -3416,8 +3324,8 @@ class MainWindow(QMainWindow):
         target_year.blockSignals(False)
 
     def refresh_category_controls(self) -> None:
-        expense_categories = self.repository.list_categories("expense")
-        income_categories = self.repository.list_categories("income")
+        expense_categories = self.transaction_controller.list_categories("expense")
+        income_categories = self.transaction_controller.list_categories("income")
 
         self.expense_category.clear()
         self.expense_category.addItems([category.name for category in expense_categories])
@@ -3432,7 +3340,7 @@ class MainWindow(QMainWindow):
 
     def refresh_recurring_category_controls(self, *_: object) -> None:
         current_kind = self.recurring_kind.currentText() if hasattr(self, "recurring_kind") else "expense"
-        categories = self.repository.list_categories(current_kind)
+        categories = self.recurring_controller.list_categories(current_kind)
         current_text = self.recurring_category.currentText() if hasattr(self, "recurring_category") else ""
 
         self.recurring_category.clear()
@@ -3455,7 +3363,7 @@ class MainWindow(QMainWindow):
             self.recurring_asset_payment_kind_combo.setEnabled(is_expense)
 
     def refresh_dashboard(self) -> None:
-        snapshot = self.repository.snapshot_for_month(self._selected_year, self._selected_month)
+        snapshot = self.analytics_controller.snapshot_for_month(self._selected_year, self._selected_month)
         self._set_metric_value(self.income_card, snapshot.income_total)
         self._set_metric_value(self.expense_card, snapshot.expense_total)
         self._set_metric_value(self.net_card, snapshot.net_total)
@@ -3467,7 +3375,7 @@ class MainWindow(QMainWindow):
         self.category_summary.setPlainText("\n".join(summary_lines))
 
     def refresh_ledger_tables(self) -> None:
-        transactions = self.repository.list_transactions_for_month(self._selected_year, self._selected_month, limit=250)
+        transactions = self.transaction_controller.list_transactions_for_month(self._selected_year, self._selected_month, limit=250)
         self._refresh_ledger_category_filter_options(transactions)
 
         selected_category = str(self.ledger_category_filter.currentData() or "").strip()
@@ -3480,7 +3388,7 @@ class MainWindow(QMainWindow):
         self._populate_table(self.full_ledger_table, filtered_transactions)
 
     def refresh_recurring_table(self) -> None:
-        recurring_items = self.repository.list_recurring_items()
+        recurring_items = self.recurring_controller.list_recurring_items()
         self.recurring_table.setRowCount(len(recurring_items))
         for row_index, item in enumerate(recurring_items):
             cells = [
@@ -3501,10 +3409,10 @@ class MainWindow(QMainWindow):
                 self.recurring_table.setItem(row_index, column_index, widget_item)
 
     def refresh_charts(self) -> None:
-        daily_totals = self.repository.daily_totals_for_month(self._selected_year, self._selected_month)
-        expense_breakdown = self.repository.expense_breakdown_for_month(self._selected_year, self._selected_month)
-        monthly_history = self.repository.monthly_history(self._selected_year, self._selected_month, months=6)
-        snapshot = self.repository.snapshot_for_month(self._selected_year, self._selected_month)
+        daily_totals = self.analytics_controller.daily_totals_for_month(self._selected_year, self._selected_month)
+        expense_breakdown = self.analytics_controller.expense_breakdown_for_month(self._selected_year, self._selected_month)
+        monthly_history = self.analytics_controller.monthly_history(self._selected_year, self._selected_month, months=6)
+        snapshot = self.analytics_controller.snapshot_for_month(self._selected_year, self._selected_month)
 
         self.charts_summary.setText(
             f"{calendar.month_name[self._selected_month]} {self._selected_year}: "
@@ -3606,6 +3514,7 @@ class MainWindow(QMainWindow):
         card.set_value(f"${amount:,.2f}", is_warning=is_warning)
 
     def _handle_period_changed(self) -> None:
+        self.app_controller.materialize_due_recurring_items()
         self._selected_month = int(self.month_toggle.currentData())
         self._selected_year = int(self.year_toggle.currentData())
         self._sync_period_controls(self.month_toggle, self.year_toggle, self.charts_month_toggle, self.charts_year_toggle)
@@ -3617,6 +3526,7 @@ class MainWindow(QMainWindow):
         self.status_bar.showMessage(f"Viewing {month_name} {self._selected_year}.", 3000)
 
     def _handle_chart_period_changed(self) -> None:
+        self.app_controller.materialize_due_recurring_items()
         self._selected_month = int(self.charts_month_toggle.currentData())
         self._selected_year = int(self.charts_year_toggle.currentData())
         self._sync_period_controls(self.charts_month_toggle, self.charts_year_toggle, self.month_toggle, self.year_toggle)
@@ -3663,7 +3573,7 @@ class MainWindow(QMainWindow):
             return
 
         start_on = self._qdate_to_date(self.recurring_start_date.date())
-        recurring_id = self.repository.add_recurring_item(
+        recurring_id = self.recurring_controller.add_recurring_item(
             kind=self.recurring_kind.currentText(),
             amount=amount,
             category=category,
@@ -3677,7 +3587,7 @@ class MainWindow(QMainWindow):
             selected_asset_id = self.recurring_asset_link_combo.currentData()
             if selected_asset_id is not None:
                 try:
-                    self.repository.link_expense_to_asset(
+                    self.recurring_controller.link_expense_to_asset(
                         int(selected_asset_id),
                         "recurring",
                         recurring_id,
@@ -3705,7 +3615,7 @@ class MainWindow(QMainWindow):
         recurring_id = item.data(Qt.UserRole)
 
         # Get the recurring item
-        all_items = self.repository.list_recurring_items(active_only=False)
+        all_items = self.recurring_controller.list_recurring_items(active_only=False)
         recurring_item = next((item for item in all_items if item.id == recurring_id), None)
 
         if not recurring_item:
@@ -3737,7 +3647,7 @@ class MainWindow(QMainWindow):
         # Category dropdown
         category_combo = QComboBox()
         category_combo.setEditable(False)
-        categories = self.repository.list_categories(kind=recurring_item.kind)
+        categories = self.recurring_controller.list_categories(kind=recurring_item.kind)
         for cat in categories:
             category_combo.addItem(cat.name, cat.name)
         category_combo.setCurrentText(recurring_item.category)
@@ -3769,9 +3679,9 @@ class MainWindow(QMainWindow):
         # Optional asset link for recurring expenses
         edit_asset_link_combo = QComboBox()
         edit_asset_link_combo.addItem("No asset link", None)
-        for asset in self.repository.list_assets():
+        for asset in self.recurring_controller.list_assets():
             edit_asset_link_combo.addItem(f"{asset.name} ({asset.asset_type.title()})", int(asset.id))
-        current_link = self.repository.get_expense_asset_link("recurring", recurring_id)
+        current_link = self.recurring_controller.get_expense_asset_link("recurring", recurring_id)
         current_asset_id = current_link["asset_id"] if current_link else None
         current_payment_kind = str(current_link["payment_kind"] if current_link else "mortgage")
         current_asset_index = edit_asset_link_combo.findData(current_asset_id)
@@ -3788,7 +3698,7 @@ class MainWindow(QMainWindow):
         layout.addRow("Apply As", edit_payment_kind_combo)
 
         def on_kind_changed(new_kind: str) -> None:
-            categories_local = self.repository.list_categories(kind=new_kind)
+            categories_local = self.recurring_controller.list_categories(kind=new_kind)
             category_combo.clear()
             for category in categories_local:
                 category_combo.addItem(category.name, category.name)
@@ -3822,7 +3732,7 @@ class MainWindow(QMainWindow):
                 QMessageBox.warning(self, APP_NAME, "Description is required.")
                 return
 
-            success = self.repository.update_recurring_item(
+            success = self.recurring_controller.update_recurring_item(
                 recurring_id,
                 kind=new_kind,
                 amount=new_amount,
@@ -3836,20 +3746,20 @@ class MainWindow(QMainWindow):
             if success:
                 try:
                     if new_kind == "expense":
-                        self.repository.set_expense_asset_link(
+                        self.recurring_controller.set_expense_asset_link(
                             edit_asset_link_combo.currentData(),
                             "recurring",
                             recurring_id,
                             payment_kind=str(edit_payment_kind_combo.currentData() or "mortgage"),
                         )
                     else:
-                        self.repository.set_expense_asset_link(None, "recurring", recurring_id)
+                        self.recurring_controller.set_expense_asset_link(None, "recurring", recurring_id)
                 except Exception:
                     QMessageBox.warning(self, APP_NAME, "Recurring item was updated, but the asset link could not be updated.")
 
                 # If category changed, recategorize existing transactions from this recurring item
                 if new_category != recurring_item.category:
-                    self.repository.change_transaction_category(
+                    self.recurring_controller.change_transaction_category(
                         from_category=recurring_item.category,
                         to_category=new_category,
                         description_filter=recurring_item.description,
@@ -3892,7 +3802,7 @@ class MainWindow(QMainWindow):
         )
 
         if reply == QMessageBox.Yes:
-            success = self.repository.delete_recurring_item(recurring_id)
+            success = self.recurring_controller.delete_recurring_item(recurring_id)
             if success:
                 self.status_bar.showMessage(f"Deleted recurring item: {description}", 4000)
                 self.refresh_all()
@@ -3920,11 +3830,11 @@ class MainWindow(QMainWindow):
 
         transaction_date = self._qdate_to_date(occurred_on)
         if kind == "expense":
-            transaction_id = self.repository.add_expense(amount, category, description, transaction_date)
+            transaction_id = self.transaction_controller.add_expense(amount, category, description, transaction_date)
             selected_asset_id = self.expense_asset_link_combo.currentData()
             if selected_asset_id is not None:
                 try:
-                    self.repository.link_expense_to_asset(
+                    self.transaction_controller.link_expense_to_asset(
                         int(selected_asset_id),
                         "transaction",
                         transaction_id,
@@ -3933,7 +3843,7 @@ class MainWindow(QMainWindow):
                 except Exception:
                     QMessageBox.warning(self, APP_NAME, "Expense was saved, but could not be linked to the selected asset.")
         else:
-            self.repository.add_income(amount, category, description, transaction_date)
+            self.transaction_controller.add_income(amount, category, description, transaction_date)
 
         self.status_bar.showMessage(f"Saved {kind} entry in {category}.", 4000)
         self.refresh_all()
@@ -3961,7 +3871,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, APP_NAME, "Could not determine selected transaction ID.")
             return
 
-        transaction = self.repository.get_transaction_by_id(int(transaction_id))
+        transaction = self.transaction_controller.get_transaction_by_id(int(transaction_id))
         if transaction is None:
             QMessageBox.warning(self, APP_NAME, "Selected transaction no longer exists.")
             self.refresh_all()
@@ -3985,7 +3895,7 @@ class MainWindow(QMainWindow):
 
         category_combo = QComboBox()
         category_combo.setEditable(True)
-        categories = self.repository.list_categories(transaction.kind)
+        categories = self.transaction_controller.list_categories(transaction.kind)
         category_combo.addItems([c.name for c in categories])
         category_combo.setCurrentText(transaction.category)
         form.addRow("Category", category_combo)
@@ -4022,7 +3932,7 @@ class MainWindow(QMainWindow):
                 QMessageBox.warning(dialog, APP_NAME, "Description is required.")
                 return
 
-            updated = self.repository.update_transaction(
+            updated = self.transaction_controller.update_transaction(
                 transaction_id=int(transaction_id),
                 amount=amount,
                 category=category,
@@ -4063,7 +3973,7 @@ class MainWindow(QMainWindow):
             transaction_id = item.data(Qt.UserRole) if item is not None else None
             if transaction_id is None:
                 continue
-            if self.repository.delete_transaction(int(transaction_id)):
+            if self.transaction_controller.delete_transaction(int(transaction_id)):
                 deleted_count += 1
 
         if deleted_count == 0:
@@ -4156,7 +4066,7 @@ class MainWindow(QMainWindow):
             return
         
         self.assistant_service.client.set_model(model_name)
-        self.repository.set_setting("selected_model", model_name)
+        self.app_controller.set_setting("selected_model", model_name)
         self.status_bar.showMessage(f"Switched to model: {model_name}", 3000)
 
     def _toggle_voice_listener(self) -> None:

@@ -1,0 +1,26 @@
+from __future__ import annotations
+
+from finance_app.storage import FinanceRepository
+
+
+class AppController:
+    def __init__(self, repository: FinanceRepository) -> None:
+        self._repository = repository
+
+    def get_setting(self, key: str, default: str | None = None):
+        return self._repository.get_setting(key, default)
+
+    def set_setting(self, key: str, value: str) -> None:
+        self._repository.set_setting(key, value)
+
+    def export_to_csv(self, directory: str):
+        return self._repository.export_to_csv(directory)
+
+    def import_from_csv(self, directory: str, clear_first: bool = False):
+        return self._repository.import_from_csv(directory, clear_first=clear_first)
+
+    def sync_recurring_with_transactions(self):
+        return self._repository.sync_recurring_with_transactions()
+
+    def materialize_due_recurring_items(self) -> None:
+        self._repository.materialize_due_recurring_items()

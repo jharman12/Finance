@@ -583,14 +583,14 @@ class AssistantService:
         for category in expense_categories:
             if category.name in recurring_categories:
                 continue  # Skip recurring categories
-            actual_spent = self.repository._get_actual_spent_for_category(year, month, category.name, "expense")
+            actual_spent = self.repository.get_actual_spent_for_category(year, month, category.name, "expense")
             if actual_spent > 0:
                 month_spending[category.name] = actual_spent
         
         # Get last 3 months of spending patterns (excluding recurring categories)
         spending_history = {}
         for offset in range(1, 4):
-            past_year, past_month = self.repository._shift_month(year, month, -offset)
+            past_year, past_month = self.repository.shift_month(year, month, -offset)
             expense_breakdown = self.repository.expense_breakdown_for_month(past_year, past_month)
             
             for category, amount in expense_breakdown:
@@ -724,12 +724,12 @@ Respond ONLY with a JSON object in this exact format (no markdown, no extra text
         min_history_months: int,
     ) -> dict[str, Any]:
         """Build deterministic planner input payload from repository state."""
-        target_year, target_month = self.repository._shift_month(reference_year, reference_month, 1)
+        target_year, target_month = self.repository.shift_month(reference_year, reference_month, 1)
 
         history_available = self.repository.count_full_history_months(reference_year, reference_month, kind="expense")
 
         history_lookback = max(min_history_months, 6)
-        start_year, start_month = self.repository._shift_month(reference_year, reference_month, -(history_lookback - 1))
+        start_year, start_month = self.repository.shift_month(reference_year, reference_month, -(history_lookback - 1))
 
         income_series = self.repository.compute_income_series(reference_year, reference_month, months=history_lookback)
 
@@ -762,7 +762,7 @@ Respond ONLY with a JSON object in this exact format (no markdown, no extra text
         recurring_categories = {entry["category"] for entry in recurring_fixed_expenses}
         timeline: list[tuple[int, int]] = []
         for offset in range(history_lookback - 1, -1, -1):
-            year, month = self.repository._shift_month(reference_year, reference_month, -offset)
+            year, month = self.repository.shift_month(reference_year, reference_month, -offset)
             timeline.append((year, month))
 
         category_history: list[dict[str, Any]] = []

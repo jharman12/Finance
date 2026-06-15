@@ -3,13 +3,18 @@ from __future__ import annotations
 import csv
 import json
 import sqlite3
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from contextlib import contextmanager
 from calendar import monthrange
 from pathlib import Path
 from typing import Iterator
 
 from finance_app.config import DEFAULT_CATEGORY_SEEDS, DEFAULT_DB_PATH
+from finance_app.infrastructure.db.analytics_repository import AnalyticsRepository
+from finance_app.infrastructure.db.budget_repository import BudgetRepository
+from finance_app.infrastructure.db.recurring_repository import RecurringRepository
+from finance_app.infrastructure.db.settings_repository import SettingsRepository
+from finance_app.infrastructure.db.transactions_repository import TransactionsRepository
 from finance_app.models import Asset, Budget, Category, RecurringItem, SummarySnapshot, Transaction
 
 
@@ -17,6 +22,27 @@ class FinanceRepository:
     def __init__(self, database_path: Path = DEFAULT_DB_PATH) -> None:
         self.database_path = database_path
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
+        self._settings_repository = SettingsRepository(self._connection)
+        self._budget_repository = BudgetRepository(
+            connection_factory=self._connection,
+            month_bounds_provider=self._month_bounds,
+            advance_months_provider=self._advance_months,
+            ensure_category_provider=self.ensure_category,
+        )
+        self._transactions_repository = TransactionsRepository(
+            connection_factory=self._connection,
+            ensure_category_provider=self.ensure_category,
+        )
+        self._analytics_repository = AnalyticsRepository(
+            connection_factory=self._connection,
+            month_bounds_provider=self._month_bounds,
+            shift_month_provider=self.shift_month,
+        )
+        self._recurring_repository = RecurringRepository(
+            connection_factory=self._connection,
+            ensure_category_provider=self.ensure_category,
+            month_bounds_provider=self._month_bounds,
+        )
         self._initialize()
 
     @contextmanager
@@ -412,108 +438,22 @@ class FinanceRepository:
         }
 
     def get_setting(self, key: str, default: str | None = None) -> str | None:
-        """Get a setting value. Returns None if key does not exist (or default if provided)."""
-        with self._connection() as connection:
-            row = connection.execute(
-                "SELECT value FROM settings WHERE key = ?",
-                (key,),
-            ).fetchone()
-        return row["value"] if row else default
+        return self._settings_repository.get_setting(key, default)
 
     def set_setting(self, key: str, value: str) -> None:
-        """Set a setting value. Creates or updates as needed."""
-        cleaned_key = key.strip()
-        if not cleaned_key:
-            return
-
-        with self._connection() as connection:
-            connection.execute(
-                "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
-                (cleaned_key, value),
-            )
+        self._settings_repository.set_setting(key, value)
 
     def get_category_budget_caps_floors(self) -> dict[str, dict[str, float]]:
-        """Get optional per-category budget floors/caps from settings storage."""
-        raw_value = self.get_setting("category_budget_caps_floors", "{}") or "{}"
-        try:
-            payload = json.loads(raw_value)
-        except json.JSONDecodeError:
-            return {}
-
-        if not isinstance(payload, dict):
-            return {}
-
-        normalized: dict[str, dict[str, float]] = {}
-        for category, config in payload.items():
-            if not isinstance(category, str) or not isinstance(config, dict):
-                continue
-
-            entry: dict[str, float] = {}
-            floor_value = config.get("floor")
-            cap_value = config.get("cap")
-            try:
-                if floor_value is not None:
-                    entry["floor"] = max(0.0, float(floor_value))
-                if cap_value is not None:
-                    entry["cap"] = max(0.0, float(cap_value))
-            except (TypeError, ValueError):
-                continue
-
-            if entry:
-                normalized[category.strip()] = entry
-
-        return normalized
+        return self._settings_repository.get_category_budget_caps_floors()
 
     def set_category_budget_caps_floors(self, caps_floors: dict[str, dict[str, float]]) -> None:
-        """Persist per-category budget floor/cap constraints."""
-        normalized: dict[str, dict[str, float]] = {}
-        for category, config in caps_floors.items():
-            if not isinstance(category, str) or not isinstance(config, dict):
-                continue
-            cleaned_category = category.strip()
-            if not cleaned_category:
-                continue
-
-            entry: dict[str, float] = {}
-            floor_value = config.get("floor")
-            cap_value = config.get("cap")
-
-            try:
-                if floor_value is not None:
-                    entry["floor"] = max(0.0, float(floor_value))
-                if cap_value is not None:
-                    entry["cap"] = max(0.0, float(cap_value))
-            except (TypeError, ValueError):
-                continue
-
-            if entry:
-                normalized[cleaned_category] = entry
-
-        self.set_setting("category_budget_caps_floors", json.dumps(normalized, sort_keys=True))
+        self._settings_repository.set_category_budget_caps_floors(caps_floors)
 
     def get_monthly_savings_goal(self, year: int, month: int, default: float = 0.0) -> float:
-        """Get the saved monthly savings goal for a specific year/month."""
-        if month < 1 or month > 12:
-            return float(default)
-
-        key = f"savings_goal:{int(year):04d}-{int(month):02d}"
-        raw_value = self.get_setting(key)
-        if raw_value is None:
-            return float(default)
-
-        try:
-            return float(raw_value)
-        except (TypeError, ValueError):
-            return float(default)
+        return self._settings_repository.get_monthly_savings_goal(year, month, default)
 
     def set_monthly_savings_goal(self, year: int, month: int, value: float) -> None:
-        """Save a monthly savings goal for a specific year/month."""
-        if month < 1 or month > 12:
-            return
-
-        key = f"savings_goal:{int(year):04d}-{int(month):02d}"
-        normalized_value = max(0.0, float(value))
-        self.set_setting(key, f"{normalized_value:.2f}")
+        self._settings_repository.set_monthly_savings_goal(year, month, value)
 
     def save_budget_reallocation_audit(self, payload: dict) -> int:
         """Persist a generated reallocation plan/audit payload."""
@@ -1106,23 +1046,13 @@ class FinanceRepository:
         occurred_on: date | None = None,
     ) -> int:
         occurred_date = occurred_on or date.today()
-        self.ensure_category(category, kind)
-
-        with self._connection() as connection:
-            cursor = connection.execute(
-                """
-                INSERT INTO transactions (kind, amount, category, description, occurred_on)
-                VALUES (?, ?, ?, ?, ?)
-                """,
-                (
-                    kind,
-                    float(amount),
-                    category.strip(),
-                    description.strip(),
-                    occurred_date.isoformat(),
-                ),
-            )
-            return int(cursor.lastrowid)
+        return self._transactions_repository.add_transaction(
+            kind=kind,
+            amount=amount,
+            category=category,
+            description=description,
+            occurred_on=occurred_date,
+        )
 
     def add_expense(
         self,
@@ -1143,33 +1073,10 @@ class FinanceRepository:
         return self.add_transaction("income", amount, category, description, occurred_on)
 
     def delete_transaction(self, transaction_id: int) -> bool:
-        with self._connection() as connection:
-            cursor = connection.execute("DELETE FROM transactions WHERE id = ?", (int(transaction_id),))
-            return cursor.rowcount > 0
+        return self._transactions_repository.delete_transaction(transaction_id)
 
     def get_transaction_by_id(self, transaction_id: int) -> Transaction | None:
-        with self._connection() as connection:
-            row = connection.execute(
-                """
-                SELECT id, kind, amount, category, description, occurred_on, created_at
-                FROM transactions
-                WHERE id = ?
-                """,
-                (int(transaction_id),),
-            ).fetchone()
-
-        if not row:
-            return None
-
-        return Transaction(
-            id=row["id"],
-            kind=row["kind"],
-            amount=float(row["amount"]),
-            category=row["category"],
-            description=row["description"],
-            occurred_on=datetime.strptime(row["occurred_on"], "%Y-%m-%d").date(),
-            created_at=datetime.fromisoformat(row["created_at"]) if row["created_at"] else None,
-        )
+        return self._transactions_repository.get_transaction_by_id(transaction_id)
 
     def update_transaction(
         self,
@@ -1179,37 +1086,13 @@ class FinanceRepository:
         description: str,
         occurred_on: date,
     ) -> bool:
-        cleaned_category = category.strip()
-        cleaned_description = description.strip()
-        if amount <= 0 or not cleaned_category or not cleaned_description:
-            return False
-
-        with self._connection() as connection:
-            kind_row = connection.execute(
-                "SELECT kind FROM transactions WHERE id = ?",
-                (int(transaction_id),),
-            ).fetchone()
-            if not kind_row:
-                return False
-
-            kind = str(kind_row["kind"]).strip() or "expense"
-            self.ensure_category(cleaned_category, kind)
-
-            cursor = connection.execute(
-                """
-                UPDATE transactions
-                SET amount = ?, category = ?, description = ?, occurred_on = ?
-                WHERE id = ?
-                """,
-                (
-                    float(amount),
-                    cleaned_category,
-                    cleaned_description,
-                    occurred_on.isoformat(),
-                    int(transaction_id),
-                ),
-            )
-            return cursor.rowcount > 0
+        return self._transactions_repository.update_transaction(
+            transaction_id=transaction_id,
+            amount=amount,
+            category=category,
+            description=description,
+            occurred_on=occurred_on,
+        )
 
     def _month_bounds(self, year: int, month: int) -> tuple[date, date]:
         start_on = date(year, month, 1)
@@ -1217,11 +1100,14 @@ class FinanceRepository:
         end_on = date(year, month, end_day)
         return start_on, end_on
 
-    def _shift_month(self, year: int, month: int, offset: int) -> tuple[int, int]:
+    def shift_month(self, year: int, month: int, offset: int) -> tuple[int, int]:
         absolute_month = (year * 12) + (month - 1) + offset
         shifted_year = absolute_month // 12
         shifted_month = absolute_month % 12 + 1
         return shifted_year, shifted_month
+
+    def _shift_month(self, year: int, month: int, offset: int) -> tuple[int, int]:
+        return self.shift_month(year, month, offset)
 
     def add_recurring_item(
         self,
@@ -1234,70 +1120,22 @@ class FinanceRepository:
         start_on: date | None = None,
         is_active: bool = True,
     ) -> int:
-        start_date = start_on or date.today()
-        self.ensure_category(category, kind)
-
-        with self._connection() as connection:
-            cursor = connection.execute(
-                """
-                INSERT INTO recurring_items (
-                    kind, amount, category, description, interval_count, interval_unit,
-                    start_on, next_run_on, last_run_on, is_active
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    kind,
-                    float(amount),
-                    category.strip(),
-                    description.strip(),
-                    int(interval_count),
-                    "months",
-                    start_date.isoformat(),
-                    start_date.isoformat(),
-                    None,
-                    1 if is_active else 0,
-                ),
-            )
-            return int(cursor.lastrowid)
+        return self._recurring_repository.add_recurring_item(
+            kind=kind,
+            amount=amount,
+            category=category,
+            description=description,
+            interval_count=interval_count,
+            interval_unit=interval_unit,
+            start_on=start_on,
+            is_active=is_active,
+        )
 
     def list_recurring_items(self, active_only: bool = False) -> list[RecurringItem]:
-        query = (
-            "SELECT id, kind, amount, category, description, interval_count, interval_unit, "
-            "start_on, next_run_on, last_run_on, is_active FROM recurring_items"
-        )
-        parameters: tuple[object, ...] = ()
-        if active_only:
-            query += " WHERE is_active = 1"
-        query += " ORDER BY is_active DESC, next_run_on ASC, id DESC"
-
-        with self._connection() as connection:
-            rows = connection.execute(query, parameters).fetchall()
-
-        return [
-            RecurringItem(
-                id=row["id"],
-                kind=row["kind"],
-                amount=float(row["amount"]),
-                category=row["category"],
-                description=row["description"],
-                interval_count=int(row["interval_count"]),
-                interval_unit="months",
-                start_on=datetime.strptime(row["start_on"], "%Y-%m-%d").date(),
-                next_run_on=datetime.strptime(row["next_run_on"], "%Y-%m-%d").date(),
-                last_run_on=datetime.strptime(row["last_run_on"], "%Y-%m-%d").date()
-                if row["last_run_on"]
-                else None,
-                is_active=bool(row["is_active"]),
-            )
-            for row in rows
-        ]
+        return self._recurring_repository.list_recurring_items(active_only=active_only)
 
     def delete_recurring_item(self, recurring_item_id: int) -> bool:
-        """Delete a recurring item by ID."""
-        with self._connection() as connection:
-            cursor = connection.execute("DELETE FROM recurring_items WHERE id = ?", (int(recurring_item_id),))
-            return cursor.rowcount > 0
+        return self._recurring_repository.delete_recurring_item(recurring_item_id)
 
     def update_recurring_item(
         self,
@@ -1310,83 +1148,23 @@ class FinanceRepository:
         start_on: date,
         is_active: bool = True,
     ) -> bool:
-        """Update a recurring item. Returns True if successful."""
-        self.ensure_category(category, kind)
-
-        with self._connection() as connection:
-            cursor = connection.execute(
-                """
-                UPDATE recurring_items
-                SET kind = ?, amount = ?, category = ?, description = ?, 
-                    interval_count = ?, start_on = ?, is_active = ?
-                WHERE id = ?
-                """,
-                (
-                    kind,
-                    float(amount),
-                    category.strip(),
-                    description.strip(),
-                    int(interval_count),
-                    start_on.isoformat(),
-                    1 if is_active else 0,
-                    int(recurring_item_id),
-                ),
-            )
-            return cursor.rowcount > 0
+        return self._recurring_repository.update_recurring_item(
+            recurring_item_id=recurring_item_id,
+            kind=kind,
+            amount=amount,
+            category=category,
+            description=description,
+            interval_count=interval_count,
+            start_on=start_on,
+            is_active=is_active,
+        )
 
     def apply_due_recurring_items(self, as_of: date | None = None) -> int:
-        current_date = as_of or date.today()
-        generated_count = 0
+        return self._recurring_repository.apply_due_recurring_items(as_of)
 
-        with self._connection() as connection:
-            rows = connection.execute(
-                """
-                SELECT id, kind, amount, category, description, interval_count, interval_unit,
-                       start_on, next_run_on, last_run_on, is_active
-                FROM recurring_items
-                WHERE is_active = 1 AND next_run_on <= ?
-                ORDER BY next_run_on ASC, id ASC
-                """,
-                (current_date.isoformat(),),
-            ).fetchall()
-
-            for row in rows:
-                next_run_on = datetime.strptime(row["next_run_on"], "%Y-%m-%d").date()
-                interval_count = int(row["interval_count"])
-                last_run_on: date | None = datetime.strptime(row["last_run_on"], "%Y-%m-%d").date() if row["last_run_on"] else None
-
-                while next_run_on <= current_date:
-                    connection.execute(
-                        """
-                        INSERT INTO transactions (kind, amount, category, description, occurred_on)
-                        VALUES (?, ?, ?, ?, ?)
-                        """,
-                        (
-                            row["kind"],
-                            float(row["amount"]),
-                            row["category"],
-                            row["description"],
-                            next_run_on.isoformat(),
-                        ),
-                    )
-                    generated_count += 1
-                    last_run_on = next_run_on
-                    next_run_on = self._advance_months(next_run_on, interval_count)
-
-                connection.execute(
-                    """
-                    UPDATE recurring_items
-                    SET last_run_on = ?, next_run_on = ?
-                    WHERE id = ?
-                    """,
-                    (
-                        last_run_on.isoformat() if last_run_on else None,
-                        next_run_on.isoformat(),
-                        row["id"],
-                    ),
-                )
-
-        return generated_count
+    def materialize_due_recurring_items(self, as_of: date | None = None) -> int:
+        """Explicit entry point for recurring materialization from orchestration layers."""
+        return self.apply_due_recurring_items(as_of)
 
     def _advance_months(self, value: date, interval_count: int) -> date:
         month_index = value.month - 1 + interval_count
@@ -1397,215 +1175,29 @@ class FinanceRepository:
 
     def list_transactions(self, limit: int = 100) -> list[Transaction]:
         self.apply_due_recurring_items()
-
-        with self._connection() as connection:
-            rows = connection.execute(
-                """
-                SELECT id, kind, amount, category, description, occurred_on, created_at
-                FROM transactions
-                ORDER BY occurred_on DESC, id DESC
-                LIMIT ?
-                """,
-                (limit,),
-            ).fetchall()
-
-        return [
-            Transaction(
-                id=row["id"],
-                kind=row["kind"],
-                amount=float(row["amount"]),
-                category=row["category"],
-                description=row["description"],
-                occurred_on=datetime.strptime(row["occurred_on"], "%Y-%m-%d").date(),
-                created_at=datetime.fromisoformat(row["created_at"]) if row["created_at"] else None,
-            )
-            for row in rows
-        ]
+        return self._transactions_repository.list_transactions(limit=limit)
 
     def list_transactions_for_month(self, year: int, month: int, limit: int = 100) -> list[Transaction]:
-        self.apply_due_recurring_items()
         start_on, end_on = self._month_bounds(year, month)
-
-        with self._connection() as connection:
-            rows = connection.execute(
-                """
-                SELECT id, kind, amount, category, description, occurred_on, created_at
-                FROM transactions
-                WHERE occurred_on BETWEEN ? AND ?
-                ORDER BY occurred_on DESC, id DESC
-                LIMIT ?
-                """,
-                (start_on.isoformat(), end_on.isoformat(), limit),
-            ).fetchall()
-
-        return [
-            Transaction(
-                id=row["id"],
-                kind=row["kind"],
-                amount=float(row["amount"]),
-                category=row["category"],
-                description=row["description"],
-                occurred_on=datetime.strptime(row["occurred_on"], "%Y-%m-%d").date(),
-                created_at=datetime.fromisoformat(row["created_at"]) if row["created_at"] else None,
-            )
-            for row in rows
-        ]
+        return self._transactions_repository.list_transactions_for_month(start_on=start_on, end_on=end_on, limit=limit)
 
     def daily_totals_for_month(self, year: int, month: int) -> list[tuple[date, float, float, float]]:
-        self.apply_due_recurring_items()
-        start_on, end_on = self._month_bounds(year, month)
-
-        with self._connection() as connection:
-            rows = connection.execute(
-                """
-                SELECT occurred_on,
-                       COALESCE(SUM(CASE WHEN kind = 'income' THEN amount ELSE 0 END), 0) AS income_total,
-                       COALESCE(SUM(CASE WHEN kind = 'expense' THEN amount ELSE 0 END), 0) AS expense_total
-                FROM transactions
-                WHERE occurred_on BETWEEN ? AND ?
-                GROUP BY occurred_on
-                ORDER BY occurred_on ASC
-                """,
-                (start_on.isoformat(), end_on.isoformat()),
-            ).fetchall()
-
-        totals_by_day = {
-            row["occurred_on"]: (float(row["income_total"]), float(row["expense_total"]))
-            for row in rows
-        }
-
-        daily_totals: list[tuple[date, float, float, float]] = []
-        current_day = start_on
-        while current_day <= end_on:
-            income_total, expense_total = totals_by_day.get(current_day.isoformat(), (0.0, 0.0))
-            daily_totals.append((current_day, income_total, expense_total, income_total - expense_total))
-            current_day += timedelta(days=1)
-
-        return daily_totals
+        return self._analytics_repository.daily_totals_for_month(year, month)
 
     def expense_breakdown_for_month(self, year: int, month: int) -> list[tuple[str, float]]:
-        self.apply_due_recurring_items()
-        start_on, end_on = self._month_bounds(year, month)
-
-        with self._connection() as connection:
-            rows = connection.execute(
-                """
-                SELECT category, COALESCE(SUM(amount), 0) AS total
-                FROM transactions
-                WHERE kind = 'expense' AND occurred_on BETWEEN ? AND ?
-                GROUP BY category
-                ORDER BY total DESC, category ASC
-                """,
-                (start_on.isoformat(), end_on.isoformat()),
-            ).fetchall()
-
-        return [(row["category"], float(row["total"])) for row in rows]
+        return self._analytics_repository.expense_breakdown_for_month(year, month)
 
     def snapshot(self) -> SummarySnapshot:
-        self.apply_due_recurring_items()
-
-        with self._connection() as connection:
-            totals = connection.execute(
-                """
-                SELECT kind, COALESCE(SUM(amount), 0) AS total
-                FROM transactions
-                GROUP BY kind
-                """
-            ).fetchall()
-
-            category_rows = connection.execute(
-                """
-                SELECT category, COALESCE(SUM(amount), 0) AS total
-                FROM transactions
-                WHERE kind = 'expense'
-                GROUP BY category
-                ORDER BY total DESC, category ASC
-                LIMIT 5
-                """
-            ).fetchall()
-
-            transaction_count = connection.execute("SELECT COUNT(*) AS count FROM transactions").fetchone()["count"]
-
-        income_total = 0.0
-        expense_total = 0.0
-        for row in totals:
-            if row["kind"] == "income":
-                income_total = float(row["total"])
-            elif row["kind"] == "expense":
-                expense_total = float(row["total"])
-
-        return SummarySnapshot(
-            income_total=income_total,
-            expense_total=expense_total,
-            net_total=income_total - expense_total,
-            transaction_count=int(transaction_count),
-            top_categories=[(row["category"], float(row["total"])) for row in category_rows],
-        )
+        return self._analytics_repository.snapshot()
 
     def snapshot_for_month(self, year: int, month: int) -> SummarySnapshot:
-        self.apply_due_recurring_items()
-        start_on, end_on = self._month_bounds(year, month)
-
-        with self._connection() as connection:
-            totals = connection.execute(
-                """
-                SELECT kind, COALESCE(SUM(amount), 0) AS total
-                FROM transactions
-                WHERE occurred_on BETWEEN ? AND ?
-                GROUP BY kind
-                """,
-                (start_on.isoformat(), end_on.isoformat()),
-            ).fetchall()
-
-            category_rows = connection.execute(
-                """
-                SELECT category, COALESCE(SUM(amount), 0) AS total
-                FROM transactions
-                WHERE kind = 'expense' AND occurred_on BETWEEN ? AND ?
-                GROUP BY category
-                ORDER BY total DESC, category ASC
-                LIMIT 5
-                """,
-                (start_on.isoformat(), end_on.isoformat()),
-            ).fetchall()
-
-            transaction_count = connection.execute(
-                "SELECT COUNT(*) AS count FROM transactions WHERE occurred_on BETWEEN ? AND ?",
-                (start_on.isoformat(), end_on.isoformat()),
-            ).fetchone()["count"]
-
-        income_total = 0.0
-        expense_total = 0.0
-        for row in totals:
-            if row["kind"] == "income":
-                income_total = float(row["total"])
-            elif row["kind"] == "expense":
-                expense_total = float(row["total"])
-
-        return SummarySnapshot(
-            income_total=income_total,
-            expense_total=expense_total,
-            net_total=income_total - expense_total,
-            transaction_count=int(transaction_count),
-            top_categories=[(row["category"], float(row["total"])) for row in category_rows],
-        )
+        return self._analytics_repository.snapshot_for_month(year, month)
 
     def monthly_history(self, reference_year: int, reference_month: int, months: int = 6) -> list[tuple[int, int, float, float, float]]:
-        history: list[tuple[int, int, float, float, float]] = []
-        for offset in range(months - 1, -1, -1):
-            year, month = self._shift_month(reference_year, reference_month, -offset)
-            snapshot = self.snapshot_for_month(year, month)
-            history.append((year, month, snapshot.income_total, snapshot.expense_total, snapshot.net_total))
-        return history
+        return self._analytics_repository.monthly_history(reference_year, reference_month, months)
 
     def compute_income_series(self, reference_year: int, reference_month: int, months: int = 6) -> list[float]:
-        """Return monthly income totals for the requested window ending at reference month."""
-        values: list[float] = []
-        for offset in range(months - 1, -1, -1):
-            year, month = self._shift_month(reference_year, reference_month, -offset)
-            snapshot = self.snapshot_for_month(year, month)
-            values.append(float(snapshot.income_total))
-        return values
+        return self._analytics_repository.compute_income_series(reference_year, reference_month, months)
 
     def get_current_month_budget_map(self, year: int, month: int, kind: str = "expense") -> dict[str, float]:
         """Return the monthly budgeted amount map keyed by category."""
@@ -1620,266 +1212,42 @@ class FinanceRepository:
         end_month: int,
         kind: str = "expense",
     ) -> dict[str, list[tuple[int, int, float]]]:
-        """Return month-by-month spend totals for each category in a date window."""
-        start_on, _ = self._month_bounds(start_year, start_month)
-        _, end_on = self._month_bounds(end_year, end_month)
-
-        with self._connection() as connection:
-            rows = connection.execute(
-                """
-                SELECT
-                    CAST(strftime('%Y', occurred_on) AS INTEGER) AS year,
-                    CAST(strftime('%m', occurred_on) AS INTEGER) AS month,
-                    category,
-                    COALESCE(SUM(amount), 0) AS total
-                FROM transactions
-                WHERE kind = ? AND occurred_on BETWEEN ? AND ?
-                GROUP BY year, month, category
-                ORDER BY year ASC, month ASC, category ASC
-                """,
-                (kind, start_on.isoformat(), end_on.isoformat()),
-            ).fetchall()
-
-        results: dict[str, list[tuple[int, int, float]]] = {}
-        for row in rows:
-            category = str(row["category"])
-            series = results.setdefault(category, [])
-            series.append((int(row["year"]), int(row["month"]), float(row["total"])))
-
-        return results
+        return self._analytics_repository.list_monthly_category_spend(
+            start_year=start_year,
+            start_month=start_month,
+            end_year=end_year,
+            end_month=end_month,
+            kind=kind,
+        )
 
     def count_full_history_months(self, reference_year: int, reference_month: int, kind: str = "expense") -> int:
-        """Count distinct months with transactions before the reference month."""
-        reference_start, _ = self._month_bounds(reference_year, reference_month)
-
-        with self._connection() as connection:
-            row = connection.execute(
-                """
-                SELECT COUNT(*) AS month_count
-                FROM (
-                    SELECT strftime('%Y-%m', occurred_on) AS year_month
-                    FROM transactions
-                    WHERE kind = ? AND occurred_on < ?
-                    GROUP BY year_month
-                )
-                """,
-                (kind, reference_start.isoformat()),
-            ).fetchone()
-
-        return int(row["month_count"]) if row else 0
+        return self._analytics_repository.count_full_history_months(reference_year, reference_month, kind)
 
     def get_recurring_totals_for_month(self, year: int, month: int) -> tuple[float, float]:
-        """Returns (total_income, total_expense) from recurring items that occur in the given month."""
-        self.apply_due_recurring_items()
-        start_on, end_on = self._month_bounds(year, month)
-
-        with self._connection() as connection:
-            rows = connection.execute(
-                """
-                SELECT kind, COALESCE(SUM(amount), 0) AS total
-                FROM transactions
-                WHERE kind IN ('income', 'expense') AND occurred_on BETWEEN ? AND ?
-                GROUP BY kind
-                """,
-                (start_on.isoformat(), end_on.isoformat()),
-            ).fetchall()
-
-        income_total = 0.0
-        expense_total = 0.0
-        for row in rows:
-            if row["kind"] == "income":
-                income_total = float(row["total"])
-            elif row["kind"] == "expense":
-                expense_total = float(row["total"])
-
-        return income_total, expense_total
+        return self._recurring_repository.get_recurring_totals_for_month(year, month)
 
     def get_projected_recurring_totals_for_month(self, year: int, month: int) -> tuple[float, float]:
-        """Returns projected (total_income, total_expense) from ALL recurring items that will occur in the month.
-        
-        Unlike get_recurring_totals_for_month which only counts processed transactions,
-        this shows what WILL occur based on recurring item schedules, accurate for budget planning.
-        """
-        income_total = 0.0
-        expense_total = 0.0
-        start_on, end_on = self._month_bounds(year, month)
-
-        with self._connection() as connection:
-            rows = connection.execute(
-                """
-                SELECT id, kind, amount, category, description, interval_count, 
-                       start_on, next_run_on, is_active
-                FROM recurring_items
-                WHERE is_active = 1
-                ORDER BY kind DESC, category ASC
-                """
-            ).fetchall()
-
-        for row in rows:
-            item_start_on = datetime.strptime(row["start_on"], "%Y-%m-%d").date()
-            
-            # Check if this recurring item occurs in the target month
-            if item_start_on > end_on:
-                # Item hasn't started yet
-                continue
-            
-            # Calculate which date it would run in the target month
-            test_date = item_start_on
-            interval_count = int(row["interval_count"])
-            
-            # Fast-forward to the target month
-            while test_date < start_on:
-                test_date = self._advance_months(test_date, interval_count)
-            
-            # If it falls within this month, add it
-            if test_date <= end_on:
-                amount = float(row["amount"])
-                if row["kind"] == "income":
-                    income_total += amount
-                elif row["kind"] == "expense":
-                    expense_total += amount
-
-        return income_total, expense_total
+        return self._recurring_repository.get_projected_recurring_totals_for_month(year, month)
 
     def add_or_update_budget(
         self, year: int, month: int, category: str, kind: str, budgeted_amount: float, notes: str = ""
     ) -> int:
-        """Add or update a budget for a specific month/category."""
-        self.ensure_category(category, kind)
-        cleaned_category = category.strip()
-        cleaned_notes = notes.strip()
-
-        with self._connection() as connection:
-            # Try to update first
-            cursor = connection.execute(
-                """
-                UPDATE budgets
-                SET budgeted_amount = ?, notes = ?, updated_at = CURRENT_TIMESTAMP
-                WHERE year = ? AND month = ? AND category = ? AND kind = ?
-                """,
-                (float(budgeted_amount), cleaned_notes, int(year), int(month), cleaned_category, kind),
-            )
-
-            if cursor.rowcount > 0:
-                # Successfully updated, fetch the id
-                result = connection.execute(
-                    "SELECT id FROM budgets WHERE year = ? AND month = ? AND category = ? AND kind = ?",
-                    (int(year), int(month), cleaned_category, kind),
-                ).fetchone()
-                return int(result["id"])
-            else:
-                # Insert new
-                cursor = connection.execute(
-                    """
-                    INSERT INTO budgets (year, month, category, kind, budgeted_amount, notes)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                    """,
-                    (int(year), int(month), cleaned_category, kind, float(budgeted_amount), cleaned_notes),
-                )
-                return int(cursor.lastrowid)
+        return self._budget_repository.add_or_update_budget(year, month, category, kind, budgeted_amount, notes)
 
     def delete_budget(self, budget_id: int) -> bool:
-        """Delete a budget entry."""
-        with self._connection() as connection:
-            cursor = connection.execute("DELETE FROM budgets WHERE id = ?", (int(budget_id),))
-            return cursor.rowcount > 0
+        return self._budget_repository.delete_budget(budget_id)
 
     def list_budgets_for_month(self, year: int, month: int, kind: str | None = None) -> list[Budget]:
-        """Get all budgets for a specific month, optionally filtered by kind."""
-        query = "SELECT id, year, month, category, kind, budgeted_amount, notes FROM budgets WHERE year = ? AND month = ?"
-        parameters: list[object] = [int(year), int(month)]
+        return self._budget_repository.list_budgets_for_month(year, month, kind)
 
-        if kind:
-            query += " AND kind = ?"
-            parameters.append(kind)
-
-        query += " ORDER BY kind DESC, category ASC"
-
-        with self._connection() as connection:
-            rows = connection.execute(query, parameters).fetchall()
-
-        budgets = []
-        for row in rows:
-            actual_spent = self._get_actual_spent_for_category(int(year), int(month), row["category"], row["kind"])
-            budgets.append(
-                Budget(
-                    id=int(row["id"]),
-                    year=int(row["year"]),
-                    month=int(row["month"]),
-                    category=row["category"],
-                    kind=row["kind"],
-                    budgeted_amount=float(row["budgeted_amount"]),
-                    actual_spent=actual_spent,
-                    notes=row["notes"],
-                )
-            )
-        return budgets
+    def get_actual_spent_for_category(self, year: int, month: int, category: str, kind: str) -> float:
+        return self._budget_repository.get_actual_spent_for_category(year, month, category, kind)
 
     def _get_actual_spent_for_category(self, year: int, month: int, category: str, kind: str) -> float:
-        """Get actual spending/income for a specific category in a month."""
-        start_on, end_on = self._month_bounds(year, month)
-
-        with self._connection() as connection:
-            row = connection.execute(
-                """
-                SELECT COALESCE(SUM(amount), 0) AS total
-                FROM transactions
-                WHERE kind = ? AND category = ? AND occurred_on BETWEEN ? AND ?
-                """,
-                (kind, category, start_on.isoformat(), end_on.isoformat()),
-            ).fetchone()
-
-        return float(row["total"]) if row else 0.0
+        return self.get_actual_spent_for_category(year, month, category, kind)
 
     def get_active_recurring_items_for_month(self, year: int, month: int, kind: str | None = None) -> list[RecurringItem]:
-        """Get recurring items that would occur in the given month."""
-        query = """
-            SELECT id, kind, amount, category, description, interval_count, interval_unit,
-                   start_on, next_run_on, last_run_on, is_active
-            FROM recurring_items
-            WHERE is_active = 1 AND kind IN ('income', 'expense')
-        """
-        parameters: list[object] = []
-
-        if kind:
-            query += " AND kind = ?"
-            parameters.append(kind)
-
-        query += " ORDER BY category ASC"
-
-        # Calculate which items would run in the target month
-        start_on, end_on = self._month_bounds(year, month)
-
-        with self._connection() as connection:
-            rows = connection.execute(query, parameters).fetchall()
-
-        matching_items = []
-        for row in rows:
-            item = RecurringItem(
-                id=int(row["id"]),
-                kind=row["kind"],
-                amount=float(row["amount"]),
-                category=row["category"],
-                description=row["description"],
-                interval_count=int(row["interval_count"]),
-                interval_unit="months",
-                start_on=datetime.strptime(row["start_on"], "%Y-%m-%d").date(),
-                next_run_on=datetime.strptime(row["next_run_on"], "%Y-%m-%d").date(),
-                last_run_on=datetime.strptime(row["last_run_on"], "%Y-%m-%d").date() if row["last_run_on"] else None,
-                is_active=bool(row["is_active"]),
-            )
-
-            # Check if this item would occur in the target month
-            # It occurs if start_on is before or during the month AND next_run_on hasn't passed significantly
-            if item.start_on <= end_on:
-                # Calculate what the next_run_on would be for this month
-                test_date = item.start_on
-                while test_date < start_on:
-                    test_date = self._advance_months(test_date, item.interval_count)
-                if test_date <= end_on:
-                    matching_items.append(item)
-
-        return matching_items
+        return self._budget_repository.get_active_recurring_items_for_month(year, month, kind)
 
     # ------------------------------------------------------------------
     # CSV Import / Export
