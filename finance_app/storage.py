@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import json
 import sqlite3
 from datetime import date, datetime, timedelta
 from contextlib import contextmanager
@@ -81,6 +82,17 @@ class FinanceRepository:
                 CREATE TABLE IF NOT EXISTS settings (
                     key TEXT PRIMARY KEY,
                     value TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS budget_reallocation_audits (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    reference_year INTEGER NOT NULL,
+                    reference_month INTEGER NOT NULL CHECK(reference_month >= 1 AND reference_month <= 12),
+                    target_year INTEGER NOT NULL,
+                    target_month INTEGER NOT NULL CHECK(target_month >= 1 AND target_month <= 12),
+                    status TEXT NOT NULL DEFAULT 'ready',
+                    payload_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
                 );
 
                 CREATE TABLE IF NOT EXISTS assets (
@@ -419,6 +431,145 @@ class FinanceRepository:
                 "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
                 (cleaned_key, value),
             )
+
+    def get_category_budget_caps_floors(self) -> dict[str, dict[str, float]]:
+        """Get optional per-category budget floors/caps from settings storage."""
+        raw_value = self.get_setting("category_budget_caps_floors", "{}") or "{}"
+        try:
+            payload = json.loads(raw_value)
+        except json.JSONDecodeError:
+            return {}
+
+        if not isinstance(payload, dict):
+            return {}
+
+        normalized: dict[str, dict[str, float]] = {}
+        for category, config in payload.items():
+            if not isinstance(category, str) or not isinstance(config, dict):
+                continue
+
+            entry: dict[str, float] = {}
+            floor_value = config.get("floor")
+            cap_value = config.get("cap")
+            try:
+                if floor_value is not None:
+                    entry["floor"] = max(0.0, float(floor_value))
+                if cap_value is not None:
+                    entry["cap"] = max(0.0, float(cap_value))
+            except (TypeError, ValueError):
+                continue
+
+            if entry:
+                normalized[category.strip()] = entry
+
+        return normalized
+
+    def set_category_budget_caps_floors(self, caps_floors: dict[str, dict[str, float]]) -> None:
+        """Persist per-category budget floor/cap constraints."""
+        normalized: dict[str, dict[str, float]] = {}
+        for category, config in caps_floors.items():
+            if not isinstance(category, str) or not isinstance(config, dict):
+                continue
+            cleaned_category = category.strip()
+            if not cleaned_category:
+                continue
+
+            entry: dict[str, float] = {}
+            floor_value = config.get("floor")
+            cap_value = config.get("cap")
+
+            try:
+                if floor_value is not None:
+                    entry["floor"] = max(0.0, float(floor_value))
+                if cap_value is not None:
+                    entry["cap"] = max(0.0, float(cap_value))
+            except (TypeError, ValueError):
+                continue
+
+            if entry:
+                normalized[cleaned_category] = entry
+
+        self.set_setting("category_budget_caps_floors", json.dumps(normalized, sort_keys=True))
+
+    def get_monthly_savings_goal(self, year: int, month: int, default: float = 0.0) -> float:
+        """Get the saved monthly savings goal for a specific year/month."""
+        if month < 1 or month > 12:
+            return float(default)
+
+        key = f"savings_goal:{int(year):04d}-{int(month):02d}"
+        raw_value = self.get_setting(key)
+        if raw_value is None:
+            return float(default)
+
+        try:
+            return float(raw_value)
+        except (TypeError, ValueError):
+            return float(default)
+
+    def set_monthly_savings_goal(self, year: int, month: int, value: float) -> None:
+        """Save a monthly savings goal for a specific year/month."""
+        if month < 1 or month > 12:
+            return
+
+        key = f"savings_goal:{int(year):04d}-{int(month):02d}"
+        normalized_value = max(0.0, float(value))
+        self.set_setting(key, f"{normalized_value:.2f}")
+
+    def save_budget_reallocation_audit(self, payload: dict) -> int:
+        """Persist a generated reallocation plan/audit payload."""
+        reference_year = int(payload.get("reference_year", 0) or 0)
+        reference_month = int(payload.get("reference_month", 0) or 0)
+        target_year = int(payload.get("target_year", 0) or 0)
+        target_month = int(payload.get("target_month", 0) or 0)
+        status = str(payload.get("status", "ready") or "ready")
+        payload_json = json.dumps(payload)
+
+        with self._connection() as connection:
+            cursor = connection.execute(
+                """
+                INSERT INTO budget_reallocation_audits (
+                    reference_year, reference_month, target_year, target_month, status, payload_json
+                )
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (reference_year, reference_month, target_year, target_month, status, payload_json),
+            )
+            return int(cursor.lastrowid)
+
+    def list_budget_reallocation_audits(self, limit: int = 50) -> list[dict]:
+        """List recent reallocation audits."""
+        with self._connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT id, reference_year, reference_month, target_year, target_month, status, payload_json, created_at
+                FROM budget_reallocation_audits
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                (int(max(1, limit)),),
+            ).fetchall()
+
+        results: list[dict] = []
+        for row in rows:
+            try:
+                payload = json.loads(row["payload_json"])
+            except json.JSONDecodeError:
+                payload = {"raw_payload": row["payload_json"]}
+
+            results.append(
+                {
+                    "id": int(row["id"]),
+                    "reference_year": int(row["reference_year"]),
+                    "reference_month": int(row["reference_month"]),
+                    "target_year": int(row["target_year"]),
+                    "target_month": int(row["target_month"]),
+                    "status": row["status"],
+                    "payload": payload,
+                    "created_at": row["created_at"],
+                }
+            )
+
+        return results
 
     def add_asset(
         self,
@@ -1446,6 +1597,76 @@ class FinanceRepository:
             snapshot = self.snapshot_for_month(year, month)
             history.append((year, month, snapshot.income_total, snapshot.expense_total, snapshot.net_total))
         return history
+
+    def compute_income_series(self, reference_year: int, reference_month: int, months: int = 6) -> list[float]:
+        """Return monthly income totals for the requested window ending at reference month."""
+        values: list[float] = []
+        for offset in range(months - 1, -1, -1):
+            year, month = self._shift_month(reference_year, reference_month, -offset)
+            snapshot = self.snapshot_for_month(year, month)
+            values.append(float(snapshot.income_total))
+        return values
+
+    def get_current_month_budget_map(self, year: int, month: int, kind: str = "expense") -> dict[str, float]:
+        """Return the monthly budgeted amount map keyed by category."""
+        rows = self.list_budgets_for_month(year, month, kind=kind)
+        return {row.category: float(row.budgeted_amount) for row in rows}
+
+    def list_monthly_category_spend(
+        self,
+        start_year: int,
+        start_month: int,
+        end_year: int,
+        end_month: int,
+        kind: str = "expense",
+    ) -> dict[str, list[tuple[int, int, float]]]:
+        """Return month-by-month spend totals for each category in a date window."""
+        start_on, _ = self._month_bounds(start_year, start_month)
+        _, end_on = self._month_bounds(end_year, end_month)
+
+        with self._connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT
+                    CAST(strftime('%Y', occurred_on) AS INTEGER) AS year,
+                    CAST(strftime('%m', occurred_on) AS INTEGER) AS month,
+                    category,
+                    COALESCE(SUM(amount), 0) AS total
+                FROM transactions
+                WHERE kind = ? AND occurred_on BETWEEN ? AND ?
+                GROUP BY year, month, category
+                ORDER BY year ASC, month ASC, category ASC
+                """,
+                (kind, start_on.isoformat(), end_on.isoformat()),
+            ).fetchall()
+
+        results: dict[str, list[tuple[int, int, float]]] = {}
+        for row in rows:
+            category = str(row["category"])
+            series = results.setdefault(category, [])
+            series.append((int(row["year"]), int(row["month"]), float(row["total"])))
+
+        return results
+
+    def count_full_history_months(self, reference_year: int, reference_month: int, kind: str = "expense") -> int:
+        """Count distinct months with transactions before the reference month."""
+        reference_start, _ = self._month_bounds(reference_year, reference_month)
+
+        with self._connection() as connection:
+            row = connection.execute(
+                """
+                SELECT COUNT(*) AS month_count
+                FROM (
+                    SELECT strftime('%Y-%m', occurred_on) AS year_month
+                    FROM transactions
+                    WHERE kind = ? AND occurred_on < ?
+                    GROUP BY year_month
+                )
+                """,
+                (kind, reference_start.isoformat()),
+            ).fetchone()
+
+        return int(row["month_count"]) if row else 0
 
     def get_recurring_totals_for_month(self, year: int, month: int) -> tuple[float, float]:
         """Returns (total_income, total_expense) from recurring items that occur in the given month."""

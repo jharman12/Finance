@@ -8,6 +8,7 @@ from typing import Any
 
 from finance_app.config import SYSTEM_PROMPT
 from finance_app.models import AssistantResult
+from finance_app.services.budget_reallocator import generate_reallocation_plan
 from finance_app.services.ollama_client import OllamaClient, OllamaMessage
 from finance_app.storage import FinanceRepository
 
@@ -696,6 +697,162 @@ Respond ONLY with a JSON object in this exact format (no markdown, no extra text
                 per_category = available_income * 0.8 / len(expense_categories)  # Use 80% of income
                 return {cat.name: per_category for cat in expense_categories if cat.name}
             return {}
+
+    def generate_next_month_reallocation(
+        self,
+        reference_year: int,
+        reference_month: int,
+        min_history_months: int = 3,
+    ) -> dict[str, Any]:
+        """Generate a deterministic AI-style next-month reallocation recommendation payload."""
+        input_contract = self._build_reallocation_input_contract(
+            reference_year=reference_year,
+            reference_month=reference_month,
+            min_history_months=min_history_months,
+        )
+
+        plan = generate_reallocation_plan(input_contract)
+        polished = self._polish_reallocation_explanations_with_llm(plan)
+
+        self.repository.save_budget_reallocation_audit(polished)
+        return polished
+
+    def _build_reallocation_input_contract(
+        self,
+        reference_year: int,
+        reference_month: int,
+        min_history_months: int,
+    ) -> dict[str, Any]:
+        """Build deterministic planner input payload from repository state."""
+        target_year, target_month = self.repository._shift_month(reference_year, reference_month, 1)
+
+        history_available = self.repository.count_full_history_months(reference_year, reference_month, kind="expense")
+
+        history_lookback = max(min_history_months, 6)
+        start_year, start_month = self.repository._shift_month(reference_year, reference_month, -(history_lookback - 1))
+
+        income_series = self.repository.compute_income_series(reference_year, reference_month, months=history_lookback)
+
+        _, recurring_expense_total = self.repository.get_projected_recurring_totals_for_month(target_year, target_month)
+        recurring_items = self.repository.get_active_recurring_items_for_month(target_year, target_month, kind="expense")
+        recurring_fixed_expenses = [
+            {
+                "category": item.category,
+                "amount": float(item.amount),
+                "description": item.description,
+            }
+            for item in recurring_items
+        ]
+
+        savings_goal = self.repository.get_monthly_savings_goal(target_year, target_month, default=0.0)
+        predicted_income = income_series[-1] if income_series else 0.0
+        discretionary_target_budget = max(0.0, float(predicted_income) - float(recurring_expense_total) - float(savings_goal))
+
+        category_spend_series = self.repository.list_monthly_category_spend(
+            start_year=start_year,
+            start_month=start_month,
+            end_year=reference_year,
+            end_month=reference_month,
+            kind="expense",
+        )
+
+        current_budgets = self.repository.get_current_month_budget_map(reference_year, reference_month, kind="expense")
+        caps_floors = self.repository.get_category_budget_caps_floors()
+
+        recurring_categories = {entry["category"] for entry in recurring_fixed_expenses}
+        timeline: list[tuple[int, int]] = []
+        for offset in range(history_lookback - 1, -1, -1):
+            year, month = self.repository._shift_month(reference_year, reference_month, -offset)
+            timeline.append((year, month))
+
+        category_history: list[dict[str, Any]] = []
+        for category_name in sorted(set(category_spend_series.keys()) | set(current_budgets.keys())):
+            if category_name in recurring_categories:
+                continue
+
+            series_map = {
+                (year, month): total for year, month, total in category_spend_series.get(category_name, [])
+            }
+            monthly_spend = [float(series_map.get((year, month), 0.0)) for year, month in timeline]
+
+            current_budget = float(current_budgets.get(category_name, 0.0))
+            recent_values = monthly_spend[-3:] if len(monthly_spend) >= 3 else monthly_spend
+            overspent_recently = bool(current_budget > 0 and sum(1 for value in recent_values if value > current_budget) >= 2)
+
+            category_history.append(
+                {
+                    "category": category_name,
+                    "current_budget": current_budget,
+                    "monthly_spend": monthly_spend,
+                    "overspent_recently": overspent_recently,
+                    "is_critical": category_name.lower() in {"groceries", "medical", "insurance", "mortgage"},
+                }
+            )
+
+        return {
+            "reference_year": int(reference_year),
+            "reference_month": int(reference_month),
+            "target_year": int(target_year),
+            "target_month": int(target_month),
+            "min_history_months": int(min_history_months),
+            "history_available_months": int(history_available),
+            "inputs": {
+                "income_series": [float(value) for value in income_series],
+                "recurring_fixed_expenses": recurring_fixed_expenses,
+                "savings_goal": float(savings_goal),
+                "category_history": category_history,
+                "category_caps_floors": caps_floors,
+                "forecast_config": {
+                    "alpha": 0.6,
+                    "beta": 0.75,
+                    "weights": [0.2, 0.3, 0.5],
+                    "increase_gate_threshold": 0.65,
+                },
+            },
+            "discretionary_target_budget": float(discretionary_target_budget),
+            "current_budgets": {k: float(v) for k, v in current_budgets.items()},
+            "caps_floors": caps_floors,
+            "critical_categories": [
+                row["category"]
+                for row in category_history
+                if bool(row.get("is_critical", False))
+            ],
+            "category_history": {
+                row["category"]: row["monthly_spend"] for row in category_history
+            },
+        }
+
+    def _polish_reallocation_explanations_with_llm(self, recommendation_payload: dict[str, Any]) -> dict[str, Any]:
+        """Optional hook to polish language later; currently deterministic passthrough."""
+        # MVP keeps financial math deterministic and only allows language polish.
+        return recommendation_payload
+
+    def apply_reallocation_plan(
+        self,
+        target_year: int,
+        target_month: int,
+        category_amounts: dict[str, float],
+        note_prefix: str = "AI-reallocated",
+    ) -> list[int]:
+        """Persist selected reallocation rows into monthly budgets."""
+        saved_ids: list[int] = []
+        for category, amount in category_amounts.items():
+            cleaned_category = str(category).strip()
+            numeric_amount = float(amount)
+            if not cleaned_category or numeric_amount <= 0:
+                continue
+
+            budget_id = self.repository.add_or_update_budget(
+                year=int(target_year),
+                month=int(target_month),
+                category=cleaned_category,
+                kind="expense",
+                budgeted_amount=numeric_amount,
+                notes=f"{note_prefix} ({target_year}-{int(target_month):02d})",
+            )
+            saved_ids.append(int(budget_id))
+
+        return saved_ids
 
     def clear_conversation_history(self) -> None:
         """Clear the conversation history. Use when starting a new session."""

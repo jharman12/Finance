@@ -1,5 +1,6 @@
 ﻿from __future__ import annotations
 
+import csv
 from datetime import date
 import calendar
 import html
@@ -126,6 +127,7 @@ class MainWindow(QMainWindow):
         self._selected_month = date.today().month
         self._selected_asset_id: int | None = None
         self._is_refreshing_asset_selector = False
+        self._is_loading_budget_goal = False
 
         self.setWindowTitle(APP_NAME)
         self.resize(1400, 880)
@@ -501,6 +503,17 @@ class MainWindow(QMainWindow):
         layout.addWidget(title)
         layout.addWidget(subtitle)
 
+        ledger_filter_row = QHBoxLayout()
+        ledger_filter_row.addWidget(QLabel("Category Filter"))
+        self.ledger_category_filter = QComboBox()
+        self.ledger_category_filter.currentIndexChanged.connect(self.refresh_ledger_tables)
+        ledger_filter_row.addWidget(self.ledger_category_filter)
+        self.clear_ledger_filter_button = QPushButton("Clear Filter")
+        self.clear_ledger_filter_button.clicked.connect(self._clear_ledger_filters)
+        ledger_filter_row.addWidget(self.clear_ledger_filter_button)
+        ledger_filter_row.addStretch(1)
+        layout.addLayout(ledger_filter_row)
+
         self.full_ledger_table = QTableWidget(0, 5)
         self.full_ledger_table.setHorizontalHeaderLabels(["Date", "Type", "Category", "Description", "Amount"])
         self.full_ledger_table.verticalHeader().setVisible(False)
@@ -565,7 +578,7 @@ class MainWindow(QMainWindow):
         # Top row: Income, total spend, net
         self.budget_income_insight = MetricCard("Monthly Income", "$0.00")
         self.budget_total_spend_insight = MetricCard("Expected Total Spend", "$0.00")
-        self.budget_net_on_target = MetricCard("Net If On Budget", "$0.00")
+        self.budget_net_on_target = MetricCard("Break-even Left to Spend", "$0.00")
 
         insight_layout.addWidget(self.budget_income_insight, 0, 0)
         insight_layout.addWidget(self.budget_total_spend_insight, 0, 1)
@@ -574,11 +587,16 @@ class MainWindow(QMainWindow):
         # Bottom row: Savings goal, remaining to spend budget
         self.budget_savings_goal_card = MetricCard("Savings Goal", "$0.00")
         self.budget_expected_net = MetricCard("Expected Net This Month", "$0.00")
-        self.budget_remaining_to_spend = MetricCard("Remaining Budget", "$0.00")
+        self.budget_remaining_to_spend = MetricCard("Goal Left to Spend", "$0.00")
+
+        self.budget_overspent_count_card = MetricCard("Overspent Categories", "0")
+        self.budget_under_budget_count_card = MetricCard("Under-Budget Categories", "0")
 
         insight_layout.addWidget(self.budget_savings_goal_card, 1, 0)
         insight_layout.addWidget(self.budget_expected_net, 1, 1)
         insight_layout.addWidget(self.budget_remaining_to_spend, 1, 2)
+        insight_layout.addWidget(self.budget_overspent_count_card, 2, 0)
+        insight_layout.addWidget(self.budget_under_budget_count_card, 2, 1)
         insight_panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
         layout.addWidget(insight_panel)
@@ -598,9 +616,12 @@ class MainWindow(QMainWindow):
         self.savings_goal_input.setPrefix("$")
         self.savings_goal_input.setSingleStep(100.0)
         self.savings_goal_input.valueChanged.connect(self._handle_savings_goal_changed)
+        self.budget_goal_status_label = QLabel("Goal status: No goal set for this month.")
+        self.budget_goal_status_label.setObjectName("PageSubtitle")
 
         goal_layout.addWidget(goal_label)
         goal_layout.addWidget(self.savings_goal_input)
+        goal_layout.addWidget(self.budget_goal_status_label)
         goal_layout.addStretch(1)
         goal_panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         layout.addWidget(goal_panel)
@@ -628,20 +649,30 @@ class MainWindow(QMainWindow):
         self.budget_table.setMinimumHeight(420)
         self.budget_table.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.budget_table.itemChanged.connect(self._handle_budget_table_item_changed)
+        self.budget_table.cellDoubleClicked.connect(self._handle_budget_table_cell_double_clicked)
         budget_layout.addWidget(self.budget_table)
 
         # Controls
         button_row = QHBoxLayout()
-        self.budget_ai_suggest_button = QPushButton("AI Suggest Budget")
+        self.budget_ai_suggest_button = QPushButton("AI Reallocate Next Month")
         self.budget_ai_suggest_button.clicked.connect(self._suggest_budget_with_ai)
         self.budget_save_button = QPushButton("Save Changes")
         self.budget_save_button.clicked.connect(self._save_budget)
         self.budget_delete_button = QPushButton("Delete Selected")
         self.budget_delete_button.clicked.connect(self._delete_budget_entry)
+        self.budget_export_month_button = QPushButton("Export Month CSV")
+        self.budget_export_month_button.clicked.connect(self._export_budget_month_csv)
+        self.budget_import_month_button = QPushButton("Import Month CSV")
+        self.budget_import_month_button.clicked.connect(self._import_budget_month_csv)
+        self.budget_ai_history_button = QPushButton("AI Plan History")
+        self.budget_ai_history_button.clicked.connect(self._open_reallocation_audit_history_dialog)
 
         button_row.addWidget(self.budget_ai_suggest_button)
         button_row.addWidget(self.budget_save_button)
         button_row.addWidget(self.budget_delete_button)
+        button_row.addWidget(self.budget_export_month_button)
+        button_row.addWidget(self.budget_import_month_button)
+        button_row.addWidget(self.budget_ai_history_button)
         button_row.addStretch(1)
         budget_layout.addLayout(button_row)
 
@@ -682,8 +713,12 @@ class MainWindow(QMainWindow):
         layout.setStretch(2, 1)
         layout.setStretch(3, 0)
 
+        # Load the persisted goal for the selected budget period.
+        self._load_savings_goal_for_selected_period()
+
     def _handle_budget_period_changed(self) -> None:
         """Update budget display when period changes."""
+        self._load_savings_goal_for_selected_period()
         self.refresh_budget()
         month_name = calendar.month_name[int(self.budget_month_toggle.currentData())]
         year = int(self.budget_year_toggle.currentData())
@@ -691,7 +726,25 @@ class MainWindow(QMainWindow):
 
     def _handle_savings_goal_changed(self) -> None:
         """Update insights when savings goal changes."""
+        if getattr(self, "_is_loading_budget_goal", False):
+            return
+
+        selected_month = int(self.budget_month_toggle.currentData())
+        selected_year = int(self.budget_year_toggle.currentData())
+        self.repository.set_monthly_savings_goal(selected_year, selected_month, self.savings_goal_input.value())
         self.refresh_budget()
+
+    def _load_savings_goal_for_selected_period(self) -> None:
+        """Load persisted monthly savings goal into the UI for the selected period."""
+        selected_month = int(self.budget_month_toggle.currentData())
+        selected_year = int(self.budget_year_toggle.currentData())
+        saved_goal = self.repository.get_monthly_savings_goal(selected_year, selected_month, default=0.0)
+
+        self._is_loading_budget_goal = True
+        self.savings_goal_input.blockSignals(True)
+        self.savings_goal_input.setValue(saved_goal)
+        self.savings_goal_input.blockSignals(False)
+        self._is_loading_budget_goal = False
 
     def refresh_budget(self) -> None:
         """Refresh the budget tab with current data and calculate insights."""
@@ -713,7 +766,6 @@ class MainWindow(QMainWindow):
 
         # Calculate key metrics
         total_expected_spend = recurring_expenses + budgeted_discretionary
-        net_if_on_target = total_income - total_expected_spend
         
         savings_goal = self.savings_goal_input.value()
         
@@ -723,15 +775,19 @@ class MainWindow(QMainWindow):
         
         # Remaining to spend = what's left in discretionary budget after expenses so far
         remaining_to_spend = discretionary_after_savings - actual_discretionary
+        break_even_left_to_spend = total_income - recurring_expenses - actual_discretionary
+
+        overspent_count = sum(1 for b in budgets if b.remaining < 0)
+        under_budget_count = sum(1 for b in budgets if b.remaining > 0)
 
         # Update insight cards
         self._set_metric_value(self.budget_income_insight, total_income)
         self._set_metric_value(self.budget_total_spend_insight, total_expected_spend)
-        self._set_metric_value(self.budget_net_on_target, max(0, net_if_on_target))
+        self._set_metric_value(self.budget_net_on_target, break_even_left_to_spend, is_warning=break_even_left_to_spend < 0)
         self._set_metric_value(self.budget_savings_goal_card, savings_goal)
         
         # Expected net = income - recurring expenses - discretionary budget - savings goal.
-        expected_net = total_income - recurring_expenses - budgeted_discretionary
+        expected_net = total_income - recurring_expenses - budgeted_discretionary - savings_goal
         if expected_net < 0:
             # Show in red/warning color
             self._set_metric_value(self.budget_expected_net, expected_net, is_warning=True)
@@ -739,7 +795,10 @@ class MainWindow(QMainWindow):
             self._set_metric_value(self.budget_expected_net, expected_net)
         
         # Remaining to spend in budget
-        self._set_metric_value(self.budget_remaining_to_spend, max(0, remaining_to_spend))
+        self._set_metric_value(self.budget_remaining_to_spend, remaining_to_spend, is_warning=remaining_to_spend < 0)
+        self.budget_overspent_count_card.set_value(str(overspent_count), is_warning=overspent_count > 0)
+        self.budget_under_budget_count_card.set_value(str(under_budget_count))
+        self._update_budget_goal_status(selected_year, selected_month, savings_goal)
 
         # Populate budget table
         self._is_refreshing_budget_table = True
@@ -778,7 +837,256 @@ class MainWindow(QMainWindow):
         self._is_refreshing_budget_table = False
 
         # Update category dropdown for new entries
-        self._refresh_budget_category_dropdown(selected_month, selected_year)
+        self._refresh_budget_category_dropdown(selected_year, selected_month)
+
+    def _handle_budget_table_cell_double_clicked(self, row: int, column: int) -> None:
+        """Jump to ledger with month/category context when users inspect actual spend."""
+        # Phase 1 drilldown targets the Actual Spent column.
+        if column != 2:
+            return
+
+        category_item = self.budget_table.item(row, 0)
+        if not category_item:
+            return
+
+        category = category_item.text().strip()
+        if not category:
+            return
+
+        selected_month = int(self.budget_month_toggle.currentData())
+        selected_year = int(self.budget_year_toggle.currentData())
+
+        # Align global period controls with the budget period before opening ledger.
+        self._selected_month = selected_month
+        self._selected_year = selected_year
+        self._sync_period_controls(self.budget_month_toggle, self.budget_year_toggle, self.month_toggle, self.year_toggle)
+        self._sync_period_controls(self.budget_month_toggle, self.budget_year_toggle, self.charts_month_toggle, self.charts_year_toggle)
+
+        self.refresh_dashboard()
+        self.refresh_ledger_tables()
+        self.refresh_charts()
+
+        # Apply category filter in Ledger for drilldown context.
+        self._set_ledger_category_filter(category)
+
+        self.tabs.setCurrentWidget(self.ledger_tab)
+        matches = self.full_ledger_table.rowCount()
+        if matches > 0:
+            self.full_ledger_table.selectRow(0)
+            self.full_ledger_table.scrollToItem(self.full_ledger_table.item(0, 0))
+
+        month_name = calendar.month_name[selected_month]
+        self.status_bar.showMessage(
+            f"Ledger drilldown: {category} in {month_name} {selected_year} ({matches} matching rows).",
+            5000,
+        )
+
+    def _set_ledger_category_filter(self, category: str | None) -> None:
+        """Set ledger category filter and refresh the table."""
+        target_value = category.strip() if category else ""
+        self.ledger_category_filter.blockSignals(True)
+
+        if not target_value:
+            index = self.ledger_category_filter.findData("")
+            if index >= 0:
+                self.ledger_category_filter.setCurrentIndex(index)
+            self.ledger_category_filter.blockSignals(False)
+            self.refresh_ledger_tables()
+            return
+
+        index = self.ledger_category_filter.findData(target_value)
+        if index < 0:
+            self.ledger_category_filter.addItem(target_value, target_value)
+            index = self.ledger_category_filter.findData(target_value)
+
+        self.ledger_category_filter.setCurrentIndex(index)
+        self.ledger_category_filter.blockSignals(False)
+        self.refresh_ledger_tables()
+
+    def _clear_ledger_filters(self) -> None:
+        """Clear ledger filters and show all rows for the selected month."""
+        self._set_ledger_category_filter(None)
+
+    def _refresh_ledger_category_filter_options(self, transactions: list[Transaction]) -> None:
+        """Refresh filter options while preserving current selection where possible."""
+        selected_value = self.ledger_category_filter.currentData() if self.ledger_category_filter.count() > 0 else ""
+        categories = sorted({tx.category for tx in transactions if tx.category})
+
+        self.ledger_category_filter.blockSignals(True)
+        self.ledger_category_filter.clear()
+        self.ledger_category_filter.addItem("All Categories", "")
+        for category in categories:
+            self.ledger_category_filter.addItem(category, category)
+
+        index = self.ledger_category_filter.findData(selected_value)
+        if index < 0:
+            index = 0
+        self.ledger_category_filter.setCurrentIndex(index)
+        self.ledger_category_filter.blockSignals(False)
+
+    def _update_budget_goal_status(self, year: int, month: int, savings_goal: float) -> None:
+        """Update the goal pacing status for the selected month."""
+        today = date.today()
+        days_in_month = calendar.monthrange(year, month)[1]
+
+        if year < today.year or (year == today.year and month < today.month):
+            elapsed_days = days_in_month
+        elif year == today.year and month == today.month:
+            elapsed_days = today.day
+        else:
+            elapsed_days = 0
+
+        snapshot = self.repository.snapshot_for_month(year, month)
+        actual_net = snapshot.net_total
+
+        if savings_goal <= 0:
+            self.budget_goal_status_label.setText("Goal status: No goal set for this month.")
+            self.budget_goal_status_label.setStyleSheet("color: #90a4bf;")
+            return
+
+        if elapsed_days <= 0:
+            self.budget_goal_status_label.setText(
+                f"Goal status: Month has not started. Target savings is ${savings_goal:,.2f}."
+            )
+            self.budget_goal_status_label.setStyleSheet("color: #90a4bf;")
+            return
+
+        target_to_date = savings_goal * (elapsed_days / days_in_month)
+        delta = actual_net - target_to_date
+
+        if delta >= 0:
+            self.budget_goal_status_label.setText(
+                f"Goal status: On track by ${delta:,.2f} (saved ${actual_net:,.2f} vs ${target_to_date:,.2f} expected)."
+            )
+            self.budget_goal_status_label.setStyleSheet("color: #8de59b;")
+        elif delta >= -(savings_goal * 0.1):
+            self.budget_goal_status_label.setText(
+                f"Goal status: Slightly behind by ${abs(delta):,.2f} (saved ${actual_net:,.2f} vs ${target_to_date:,.2f} expected)."
+            )
+            self.budget_goal_status_label.setStyleSheet("color: #ffd166;")
+        else:
+            self.budget_goal_status_label.setText(
+                f"Goal status: Behind by ${abs(delta):,.2f} (saved ${actual_net:,.2f} vs ${target_to_date:,.2f} expected)."
+            )
+            self.budget_goal_status_label.setStyleSheet("color: #ff8f8f;")
+
+    def _export_budget_month_csv(self) -> None:
+        """Export current month budget rows to a CSV file."""
+        selected_month = int(self.budget_month_toggle.currentData())
+        selected_year = int(self.budget_year_toggle.currentData())
+        default_name = f"budget_{selected_year}_{selected_month:02d}.csv"
+
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export budget month CSV",
+            default_name,
+            "CSV Files (*.csv)",
+        )
+        if not file_path:
+            return
+
+        budgets = self.repository.list_budgets_for_month(selected_year, selected_month)
+        if not budgets:
+            QMessageBox.information(self, APP_NAME, "No budget entries for this month to export.")
+            return
+
+        try:
+            with open(file_path, "w", newline="", encoding="utf-8") as csv_file:
+                writer = csv.DictWriter(
+                    csv_file,
+                    fieldnames=["year", "month", "category", "kind", "budgeted_amount", "notes"],
+                )
+                writer.writeheader()
+                for budget in budgets:
+                    writer.writerow(
+                        {
+                            "year": selected_year,
+                            "month": selected_month,
+                            "category": budget.category,
+                            "kind": budget.kind,
+                            "budgeted_amount": f"{budget.budgeted_amount:.2f}",
+                            "notes": budget.notes,
+                        }
+                    )
+
+            self.status_bar.showMessage(f"Exported budget month CSV to {file_path}", 4000)
+        except Exception as exc:
+            QMessageBox.critical(self, APP_NAME, f"Budget CSV export failed: {exc}")
+
+    def _import_budget_month_csv(self) -> None:
+        """Import budget rows into the currently selected month from a CSV file."""
+        selected_month = int(self.budget_month_toggle.currentData())
+        selected_year = int(self.budget_year_toggle.currentData())
+
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Import budget month CSV",
+            "",
+            "CSV Files (*.csv)",
+        )
+        if not file_path:
+            return
+
+        reply = QMessageBox.question(
+            self,
+            APP_NAME,
+            "Replace existing budgets for this month before importing?",
+            QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel,
+            QMessageBox.No,
+        )
+        if reply == QMessageBox.Cancel:
+            return
+
+        if reply == QMessageBox.Yes:
+            existing_rows = self.repository.list_budgets_for_month(selected_year, selected_month)
+            for budget in existing_rows:
+                if budget.id is not None:
+                    self.repository.delete_budget(budget.id)
+
+        imported_count = 0
+        skipped_count = 0
+        try:
+            with open(file_path, "r", newline="", encoding="utf-8") as csv_file:
+                reader = csv.DictReader(csv_file)
+                for row in reader:
+                    category = str(row.get("category", "")).strip()
+                    kind = str(row.get("kind", "expense")).strip().lower() or "expense"
+                    notes = str(row.get("notes", "")).strip()
+
+                    raw_amount = str(row.get("budgeted_amount", "")).strip().replace("$", "").replace(",", "")
+                    try:
+                        amount = float(raw_amount)
+                    except ValueError:
+                        skipped_count += 1
+                        continue
+
+                    if not category or amount <= 0 or kind not in ("expense", "income"):
+                        skipped_count += 1
+                        continue
+
+                    self.repository.add_or_update_budget(
+                        year=selected_year,
+                        month=selected_month,
+                        category=category,
+                        kind=kind,
+                        budgeted_amount=amount,
+                        notes=notes,
+                    )
+                    imported_count += 1
+
+            self.refresh_budget()
+            self.status_bar.showMessage(
+                f"Imported {imported_count} budget rows for {calendar.month_name[selected_month]} {selected_year}.",
+                5000,
+            )
+            if skipped_count > 0:
+                QMessageBox.information(
+                    self,
+                    APP_NAME,
+                    f"Imported {imported_count} rows. Skipped {skipped_count} invalid rows.",
+                )
+        except Exception as exc:
+            QMessageBox.critical(self, APP_NAME, f"Budget CSV import failed: {exc}")
 
     def _handle_budget_table_item_changed(self, item: QTableWidgetItem) -> None:
         """Persist inline budget amount edits and refresh dependent insights."""
@@ -912,80 +1220,459 @@ class MainWindow(QMainWindow):
             self.refresh_budget()
 
     def _suggest_budget_with_ai(self) -> None:
-        """Request AI budget suggestions."""
+        """Generate and optionally apply AI reallocation for next month."""
         selected_month = int(self.budget_month_toggle.currentData())
         selected_year = int(self.budget_year_toggle.currentData())
 
-        income_total, expense_total = self.repository.get_projected_recurring_totals_for_month(selected_year, selected_month)
-        available_budget = income_total - expense_total
-
-        if available_budget <= 0:
-            QMessageBox.warning(
-                self, APP_NAME, "Available budget must be positive.\n\nEnsure recurring income exceeds recurring expenses."
-            )
-            return
-
-        # First, create budget entries for all recurring expenses at their full amounts
-        recurring_expenses = self.repository.get_active_recurring_items_for_month(selected_year, selected_month, kind="expense")
-        discretionary_budget = available_budget
-        
-        for recurring_item in recurring_expenses:
-            # Add budget for this recurring expense
-            self.repository.add_or_update_budget(
-                year=selected_year,
-                month=selected_month,
-                category=recurring_item.category,
-                kind="expense",
-                budgeted_amount=recurring_item.amount,
-                notes="Recurring item (auto-allocated)",
-            )
-            # Deduct from discretionary budget
-            discretionary_budget -= recurring_item.amount
-        
-        if discretionary_budget <= 0:
-            # No room for additional discretionary spending
-            self.status_bar.showMessage(f"Budgets set for {len(recurring_expenses)} recurring items. No discretionary budget remaining.", 3000)
-            self.refresh_budget()
-            return
-
         self.budget_ai_suggest_button.setEnabled(False)
-        self.budget_ai_suggest_button.setText("Generating suggestions...")
+        self.budget_ai_suggest_button.setText("Generating reallocation...")
 
         try:
-            # Ask AI to allocate only the discretionary budget
-            allocations = self.assistant_service.generate_budget_allocation(
-                selected_year, selected_month, discretionary_budget, recurring_expenses_list=recurring_expenses
+            plan = self.assistant_service.generate_next_month_reallocation(
+                reference_year=selected_year,
+                reference_month=selected_month,
+                min_history_months=3,
             )
 
-            if not allocations:
-                QMessageBox.warning(self, APP_NAME, "Could not generate discretionary budget suggestions. Recurring items have been budgeted.")
-                self.budget_ai_suggest_button.setEnabled(True)
-                self.budget_ai_suggest_button.setText("AI Suggest Budget")
-                self.refresh_budget()
+            if plan.get("status") == "insufficient_history":
+                self._show_insufficient_history_state(plan)
                 return
 
-            # Apply allocations to budget (for discretionary categories)
-            for category, amount in allocations.items():
-                if amount > 0:
-                    self.repository.add_or_update_budget(
-                        year=selected_year,
-                        month=selected_month,
-                        category=category,
-                        kind="expense",
-                        budgeted_amount=amount,
-                        notes="AI-suggested discretionary allocation",
-                    )
+            recommendations = plan.get("recommendations", [])
+            if not isinstance(recommendations, list) or len(recommendations) == 0:
+                QMessageBox.information(self, APP_NAME, "No reallocation changes were recommended for next month.")
+                return
 
-            self.status_bar.showMessage(
-                f"Budgeted {len(recurring_expenses)} recurring items + {len(allocations)} discretionary categories.", 3000
-            )
-            self.refresh_budget()
+            selected_map = self._open_reallocation_review_dialog(plan)
+            if not selected_map:
+                self.status_bar.showMessage("AI reallocation preview generated. No changes applied.", 3500)
+                return
+
+            self._apply_selected_reallocation_rows(plan, selected_map)
 
         except Exception as e:
             QMessageBox.critical(self, APP_NAME, f"Error generating suggestions: {str(e)}")
         finally:
             self.budget_ai_suggest_button.setEnabled(True)
-            self.budget_ai_suggest_button.setText("AI Suggest Budget")
+            self.budget_ai_suggest_button.setText("AI Reallocate Next Month")
+
+    def _show_insufficient_history_state(self, plan: dict) -> None:
+        min_history = int(plan.get("min_history_months", 3) or 3)
+        available = int(plan.get("history_available_months", 0) or 0)
+        message = str(plan.get("insufficient_history_message", "")).strip()
+        details = (
+            f"Not enough history for AI reallocation.\n\n"
+            f"Required: {min_history} full months\n"
+            f"Available: {available} months"
+        )
+        if message:
+            details = f"{details}\n\n{message}"
+        QMessageBox.information(self, APP_NAME, details)
+
+    def _open_reallocation_review_dialog(self, plan: dict) -> dict[str, float]:
+        """Show review table and return selected category amounts to apply."""
+        recommendations = plan.get("recommendations", [])
+        if not isinstance(recommendations, list) or not recommendations:
+            return {}
+
+        target_year = int(plan.get("target_year", 0) or 0)
+        target_month = int(plan.get("target_month", 1) or 1)
+        target_total = float(plan.get("discretionary_target_budget", 0.0) or 0.0)
+        goal_message = str(plan.get("goal_message", "")).strip()
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("AI Reallocation Review")
+        dialog.setMinimumSize(980, 560)
+
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(10)
+
+        title = QLabel(f"Review AI Reallocation for {calendar.month_name[target_month]} {target_year}")
+        title.setObjectName("SectionTitle")
+        layout.addWidget(title)
+
+        summary = QLabel(f"Target discretionary total: ${target_total:,.2f}")
+        summary.setObjectName("PageSubtitle")
+        layout.addWidget(summary)
+
+        if goal_message:
+            goal = QLabel(f"Goal: {goal_message}")
+            goal.setObjectName("PageSubtitle")
+            goal.setWordWrap(True)
+            layout.addWidget(goal)
+
+        table = QTableWidget(len(recommendations), 7)
+        table.setHorizontalHeaderLabels(["Apply", "Category", "Current", "Recommended", "Change %", "Confidence", "Reason"])
+        table.verticalHeader().setVisible(False)
+        table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        table.setAlternatingRowColors(True)
+        table.horizontalHeader().setStretchLastSection(True)
+
+        for row_index, row in enumerate(recommendations):
+            category = str(row.get("category", "")).strip()
+            old_amount = float(row.get("old_amount", 0.0) or 0.0)
+            new_amount = float(row.get("new_amount", 0.0) or 0.0)
+            change_pct = float(row.get("change_percent", 0.0) or 0.0)
+            confidence = float(row.get("confidence", 0.0) or 0.0)
+            explanation = str(row.get("explanation", "")).strip()
+
+            apply_item = QTableWidgetItem("")
+            apply_item.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+            apply_item.setCheckState(Qt.Checked)
+            apply_item.setData(Qt.UserRole, (category, new_amount))
+            table.setItem(row_index, 0, apply_item)
+
+            cells = [
+                category,
+                f"${old_amount:,.2f}",
+                f"${new_amount:,.2f}",
+                f"{change_pct:+.1f}%",
+                f"{confidence:.2f}",
+                explanation,
+            ]
+            for column_offset, text in enumerate(cells, start=1):
+                item = QTableWidgetItem(text)
+                item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+                if column_offset in (2, 3, 4, 5):
+                    item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                table.setItem(row_index, column_offset, item)
+
+        layout.addWidget(table, 1)
+
+        button_row = QHBoxLayout()
+        select_all = QPushButton("Select All")
+        clear_all = QPushButton("Clear All")
+        apply_selected = QPushButton("Apply Selected")
+        cancel = QPushButton("Cancel")
+        button_row.addWidget(select_all)
+        button_row.addWidget(clear_all)
+        button_row.addStretch(1)
+        button_row.addWidget(apply_selected)
+        button_row.addWidget(cancel)
+        layout.addLayout(button_row)
+
+        def _set_all_checks(checked: bool) -> None:
+            state = Qt.Checked if checked else Qt.Unchecked
+            for row_index in range(table.rowCount()):
+                item = table.item(row_index, 0)
+                if item:
+                    item.setCheckState(state)
+
+        select_all.clicked.connect(lambda: _set_all_checks(True))
+        clear_all.clicked.connect(lambda: _set_all_checks(False))
+        apply_selected.clicked.connect(dialog.accept)
+        cancel.clicked.connect(dialog.reject)
+
+        if dialog.exec_() != QDialog.Accepted:
+            return {}
+
+        selected_map: dict[str, float] = {}
+        for row_index in range(table.rowCount()):
+            apply_item = table.item(row_index, 0)
+            if not apply_item or apply_item.checkState() != Qt.Checked:
+                continue
+            data = apply_item.data(Qt.UserRole)
+            if not data or len(data) != 2:
+                continue
+            category, amount = data
+            category_text = str(category).strip()
+            numeric_amount = float(amount)
+            if category_text and numeric_amount > 0:
+                selected_map[category_text] = numeric_amount
+
+        if not selected_map:
+            QMessageBox.information(self, APP_NAME, "No rows selected to apply.")
+        return selected_map
+
+    def _apply_selected_reallocation_rows(self, plan: dict, selected_map: dict[str, float]) -> None:
+        """Apply selected recommendation rows to target month budgets."""
+        target_year = int(plan.get("target_year", 0) or 0)
+        target_month = int(plan.get("target_month", 0) or 0)
+        if target_year <= 0 or target_month < 1 or target_month > 12:
+            QMessageBox.warning(self, APP_NAME, "Invalid target month returned by AI reallocation.")
+            return
+
+        saved_ids = self.assistant_service.apply_reallocation_plan(
+            target_year=target_year,
+            target_month=target_month,
+            category_amounts=selected_map,
+        )
+
+        self.status_bar.showMessage(
+            f"Applied AI reallocation: {len(saved_ids)} categories updated for {calendar.month_name[target_month]} {target_year}.",
+            5000,
+        )
+
+        selected_year = int(self.budget_year_toggle.currentData())
+        selected_month = int(self.budget_month_toggle.currentData())
+        if target_year == selected_year and target_month == selected_month:
+            self.refresh_budget()
+
+    def _open_reallocation_audit_history_dialog(self) -> None:
+        """Display saved AI reallocation plans with filters, export, and rich detail view."""
+        audits = self.repository.list_budget_reallocation_audits(limit=100)
+        if not audits:
+            QMessageBox.information(self, APP_NAME, "No AI reallocation history found yet.")
+            return
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("AI Reallocation History")
+        dialog.setMinimumSize(1200, 640)
+
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(10)
+
+        title = QLabel("Saved AI Reallocation Plans")
+        title.setObjectName("SectionTitle")
+        layout.addWidget(title)
+
+        # Filter row
+        filter_layout = QHBoxLayout()
+        filter_layout.addWidget(QLabel("Filter by Status:"))
+        status_filter = QComboBox()
+        status_filter.addItems(["All", "ready", "insufficient_history", "infeasible"])
+        filter_layout.addWidget(status_filter)
+
+        filter_layout.addWidget(QLabel("Target Month:"))
+        month_filter = QComboBox()
+        month_filter.addItem("All")
+        for month_index in range(1, 13):
+            month_filter.addItem(calendar.month_name[month_index], month_index)
+        filter_layout.addWidget(month_filter)
+        filter_layout.addStretch(1)
+        layout.addLayout(filter_layout)
+
+        table = QTableWidget()
+        table.setHorizontalHeaderLabels(["Created", "Reference", "Target", "Status", "Changes", "Goal", "Audit ID"])
+        table.verticalHeader().setVisible(False)
+        table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        table.setSelectionMode(QAbstractItemView.SingleSelection)
+        table.setAlternatingRowColors(True)
+        table.horizontalHeader().setStretchLastSection(True)
+
+        def _populate_table(audits_to_show: list[dict]) -> None:
+            table.setRowCount(0)
+            for row_index, audit in enumerate(audits_to_show):
+                table.insertRow(row_index)
+                payload = audit.get("payload", {}) if isinstance(audit.get("payload"), dict) else {}
+                recs = payload.get("recommendations", []) if isinstance(payload.get("recommendations"), list) else []
+                goal_message = str(payload.get("goal_message", "")).strip()
+
+                created = str(audit.get("created_at", ""))
+                reference_label = f"{calendar.month_name[int(audit.get('reference_month', 1))]} {int(audit.get('reference_year', 0))}"
+                target_label = f"{calendar.month_name[int(audit.get('target_month', 1))]} {int(audit.get('target_year', 0))}"
+
+                row_values = [
+                    created,
+                    reference_label,
+                    target_label,
+                    str(audit.get("status", "")),
+                    str(len(recs)),
+                    goal_message,
+                    str(audit.get("id", "")),
+                ]
+
+                for column_index, value in enumerate(row_values):
+                    item = QTableWidgetItem(value)
+                    item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+                    if column_index == 0:
+                        item.setData(Qt.UserRole, (payload, audit))
+                    table.setItem(row_index, column_index, item)
+
+        _populate_table(audits)
+
+        def _apply_filters() -> None:
+            status_val = status_filter.currentText()
+            month_val = month_filter.currentData()
+            filtered = [
+                audit for audit in audits
+                if (status_val == "All" or audit.get("status") == status_val)
+                and (month_val is None or audit.get("target_month") == month_val)
+            ]
+            _populate_table(filtered)
+
+        status_filter.currentTextChanged.connect(_apply_filters)
+        month_filter.currentIndexChanged.connect(_apply_filters)
+
+        layout.addWidget(table, 1)
+
+        button_row = QHBoxLayout()
+        view_details = QPushButton("View Details")
+        reapply_plan = QPushButton("Apply Plan Again")
+        rollback_plan = QPushButton("Rollback Using Old Amounts")
+        export_button = QPushButton("Export Audit")
+        close_button = QPushButton("Close")
+        button_row.addWidget(view_details)
+        button_row.addWidget(reapply_plan)
+        button_row.addWidget(rollback_plan)
+        button_row.addWidget(export_button)
+        button_row.addStretch(1)
+        button_row.addWidget(close_button)
+        layout.addLayout(button_row)
+
+        def _selected_data() -> tuple[dict, dict] | tuple[dict, dict]:
+            current_row = table.currentRow()
+            if current_row < 0:
+                return {}, {}
+            cell = table.item(current_row, 0)
+            data = cell.data(Qt.UserRole) if cell else None
+            if isinstance(data, tuple) and len(data) == 2:
+                return data
+            return {}, {}
+
+        def _view_details() -> None:
+            payload, audit_row = _selected_data()
+            if not payload:
+                QMessageBox.information(self, APP_NAME, "Select an audit row first.")
+                return
+
+            recommendations = payload.get("recommendations", [])
+            if not isinstance(recommendations, list):
+                recommendations = []
+
+            detail_dialog = QDialog(self)
+            detail_dialog.setWindowTitle("AI Reallocation Details")
+            detail_dialog.setMinimumSize(1000, 500)
+
+            detail_layout = QVBoxLayout(detail_dialog)
+            detail_layout.setContentsMargins(12, 12, 12, 12)
+            detail_layout.setSpacing(8)
+
+            header = QLabel(f"Audit ID {audit_row.get('id', 'N/A')} | Status: {payload.get('status', 'unknown')}")
+            header.setObjectName("SectionTitle")
+            detail_layout.addWidget(header)
+
+            goal_text = str(payload.get("goal_message", "")).strip()
+            if goal_text:
+                goal_label = QLabel(f"Goal: {goal_text}")
+                goal_label.setWordWrap(True)
+                detail_layout.addWidget(goal_label)
+
+            detail_table = QTableWidget(len(recommendations), 6)
+            detail_table.setHorizontalHeaderLabels(["Category", "Current→Recommended", "Change %", "Confidence", "Reason Tags", "Explanation"])
+            detail_table.verticalHeader().setVisible(False)
+            detail_table.setAlternatingRowColors(True)
+            detail_table.horizontalHeader().setStretchLastSection(True)
+
+            for rec_idx, row in enumerate(recommendations):
+                category = str(row.get("category", "")).strip()
+                old_amount = float(row.get("old_amount", 0.0) or 0.0)
+                new_amount = float(row.get("new_amount", 0.0) or 0.0)
+                change_pct = float(row.get("change_percent", 0.0) or 0.0)
+                confidence = float(row.get("confidence", 0.0) or 0.0)
+                reason_tags = row.get("reason_tags", [])
+                explanation = str(row.get("explanation", "")).strip()
+
+                cells = [
+                    category,
+                    f"${old_amount:,.2f} → ${new_amount:,.2f}",
+                    f"{change_pct:+.1f}%",
+                    f"{confidence:.3f}",
+                    ", ".join(reason_tags) if isinstance(reason_tags, list) else str(reason_tags),
+                    explanation,
+                ]
+
+                for col_idx, text in enumerate(cells):
+                    item = QTableWidgetItem(text)
+                    item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+                    if col_idx in (1, 2, 3):
+                        item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                    detail_table.setItem(rec_idx, col_idx, item)
+
+            detail_layout.addWidget(detail_table, 1)
+            detail_dialog.exec_()
+
+        def _export_audit() -> None:
+            payload, audit_row = _selected_data()
+            if not payload:
+                QMessageBox.information(self, APP_NAME, "Select an audit row first.")
+                return
+
+            target_year = int(payload.get("target_year", 0) or 0)
+            target_month = int(payload.get("target_month", 1) or 1)
+            default_name = f"audit_reallocation_{target_year}_{target_month:02d}.json"
+
+            file_path, _ = QFileDialog.getSaveFileName(
+                self,
+                "Export Audit to JSON",
+                default_name,
+                "JSON Files (*.json)",
+            )
+            if not file_path:
+                return
+
+            try:
+                import json
+                with open(file_path, "w", encoding="utf-8") as f:
+                    json.dump(payload, f, indent=2)
+                self.status_bar.showMessage(f"Audit exported to {file_path}", 4000)
+            except Exception as e:
+                QMessageBox.critical(self, APP_NAME, f"Export failed: {str(e)}")
+
+        def _reapply() -> None:
+            payload, audit_row = _selected_data()
+            if not payload:
+                QMessageBox.information(self, APP_NAME, "Select an audit row first.")
+                return
+
+            selected_map = self._open_reallocation_review_dialog(payload)
+            if not selected_map:
+                return
+            self._apply_selected_reallocation_rows(payload, selected_map)
+
+        def _rollback() -> None:
+            payload, audit_row = _selected_data()
+            if not payload:
+                QMessageBox.information(self, APP_NAME, "Select an audit row first.")
+                return
+
+            target_year = int(payload.get("target_year", 0) or 0)
+            target_month = int(payload.get("target_month", 0) or 0)
+            if target_year <= 0 or target_month < 1 or target_month > 12:
+                QMessageBox.warning(self, APP_NAME, "Selected audit payload has invalid target month.")
+                return
+
+            recommendations = payload.get("recommendations", [])
+            if not isinstance(recommendations, list) or not recommendations:
+                QMessageBox.information(self, APP_NAME, "No recommendation rows available for rollback.")
+                return
+
+            rollback_map: dict[str, float] = {}
+            for row in recommendations:
+                category = str(row.get("category", "")).strip()
+                old_amount = float(row.get("old_amount", 0.0) or 0.0)
+                if category and old_amount > 0:
+                    rollback_map[category] = old_amount
+
+            if not rollback_map:
+                QMessageBox.information(self, APP_NAME, "No positive old amounts found to rollback.")
+                return
+
+            saved_ids = self.assistant_service.apply_reallocation_plan(
+                target_year=target_year,
+                target_month=target_month,
+                category_amounts=rollback_map,
+                note_prefix="AI-rollback",
+            )
+            self.status_bar.showMessage(
+                f"Rollback applied: {len(saved_ids)} categories restored for {calendar.month_name[target_month]} {target_year}.",
+                5000,
+            )
+
+            selected_year = int(self.budget_year_toggle.currentData())
+            selected_month = int(self.budget_month_toggle.currentData())
+            if target_year == selected_year and target_month == selected_month:
+                self.refresh_budget()
+
+        view_details.clicked.connect(_view_details)
+        reapply_plan.clicked.connect(_reapply)
+        rollback_plan.clicked.connect(_rollback)
+        export_button.clicked.connect(_export_audit)
+        close_button.clicked.connect(dialog.accept)
+
+        dialog.exec_()
 
     def _open_category_manager(self) -> None:
         """Open the category management dialog."""
@@ -2439,8 +3126,16 @@ class MainWindow(QMainWindow):
 
     def refresh_ledger_tables(self) -> None:
         transactions = self.repository.list_transactions_for_month(self._selected_year, self._selected_month, limit=250)
-        self._populate_table(self.recent_table, transactions[:10])
-        self._populate_table(self.full_ledger_table, transactions)
+        self._refresh_ledger_category_filter_options(transactions)
+
+        selected_category = str(self.ledger_category_filter.currentData() or "").strip()
+        if selected_category:
+            filtered_transactions = [tx for tx in transactions if tx.category == selected_category]
+        else:
+            filtered_transactions = transactions
+
+        self._populate_table(self.recent_table, filtered_transactions[:10])
+        self._populate_table(self.full_ledger_table, filtered_transactions)
 
     def refresh_recurring_table(self) -> None:
         recurring_items = self.repository.list_recurring_items()
