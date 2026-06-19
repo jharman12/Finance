@@ -454,3 +454,12 @@ If you want, I can next add:
 1. a helper script that generates the TLS cert and key for you
 2. a Windows firewall setup command
 3. a one-command launcher for the remote device
+
+
+powershell -ExecutionPolicy Bypass -File .\scripts\start_remote_sender.ps1 `
+  -Host "192.168.1.20" `
+  -RemoteAudioToken "PASTE_TOKEN" `
+  -CaCertPath "C:\FinanceVoice\finance-voice-cert.pem" `
+  -VoskModelPath "C:\FinanceVoice\models\vosk-model-en-us-0.22-lgraph" `
+  -SourceId "kitchen-node" `
+  -EnableDebug
