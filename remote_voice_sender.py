@@ -215,7 +215,10 @@ class RemoteWakeStreamSender:
         )
         # Override to use sender service type
         self._discovery_publisher.service_type = SERVICE_TYPE_SENDER
-
+        if self._discovery_publisher.start():
+            _log(f"Advertising as remote device '{self._discovery_publisher.device_name}' on the network.")
+        else:
+            _log("Failed to advertise on network; pairing from main app may not discover this device.")
 
         def callback(indata, frames, time_info, status) -> None:  # type: ignore[no-untyped-def]
             del frames, time_info
