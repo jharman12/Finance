@@ -12,10 +12,11 @@ from typing import Iterator
 from finance_app.config import DEFAULT_CATEGORY_SEEDS, DEFAULT_DB_PATH
 from finance_app.infrastructure.db.analytics_repository import AnalyticsRepository
 from finance_app.infrastructure.db.budget_repository import BudgetRepository
+from finance_app.infrastructure.db.paired_device_repository import PairedRemoteDeviceRepository
 from finance_app.infrastructure.db.recurring_repository import RecurringRepository
 from finance_app.infrastructure.db.settings_repository import SettingsRepository
 from finance_app.infrastructure.db.transactions_repository import TransactionsRepository
-from finance_app.models import Asset, Budget, Category, RecurringItem, SummarySnapshot, Transaction
+from finance_app.models import Asset, Budget, Category, PairedRemoteDevice, RecurringItem, SummarySnapshot, Transaction
 
 
 class FinanceRepository:
@@ -23,6 +24,7 @@ class FinanceRepository:
         self.database_path = database_path
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
         self._settings_repository = SettingsRepository(self._connection)
+        self._paired_device_repository = PairedRemoteDeviceRepository(self._connection)
         self._budget_repository = BudgetRepository(
             connection_factory=self._connection,
             month_bounds_provider=self._month_bounds,
@@ -165,6 +167,19 @@ class FinanceRepository:
                     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     UNIQUE(asset_id, valued_on),
                     FOREIGN KEY(asset_id) REFERENCES assets(id) ON DELETE CASCADE
+                );
+
+                CREATE TABLE IF NOT EXISTS paired_remote_devices (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    source_id TEXT NOT NULL UNIQUE,
+                    device_name TEXT NOT NULL,
+                    host_ip TEXT NOT NULL,
+                    port INTEGER NOT NULL CHECK(port > 0),
+                    role TEXT NOT NULL,
+                    protocol_version TEXT NOT NULL,
+                    paired_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    last_connected_at TEXT,
+                    is_active INTEGER NOT NULL DEFAULT 1
                 );
                 """
             )
@@ -1500,3 +1515,25 @@ class FinanceRepository:
             counts["assets"] = imported
 
         return counts
+
+    def list_paired_remote_devices(self, active_only: bool = True) -> list[PairedRemoteDevice]:
+        """List paired remote voice devices."""
+        if active_only:
+            return self._paired_device_repository.list_active()
+        return self._paired_device_repository.list_all()
+
+    def get_paired_remote_device(self, source_id: str) -> PairedRemoteDevice | None:
+        """Get a paired remote device by source ID."""
+        return self._paired_device_repository.get_by_source_id(source_id)
+
+    def save_paired_remote_device(self, device: PairedRemoteDevice) -> PairedRemoteDevice:
+        """Save or update a paired remote device."""
+        return self._paired_device_repository.save(device)
+
+    def update_paired_device_connection_time(self, source_id: str) -> None:
+        """Update the last connected timestamp for a device."""
+        self._paired_device_repository.update_last_connected(source_id)
+
+    def remove_paired_remote_device(self, source_id: str) -> None:
+        """Soft delete (deactivate) a paired remote device."""
+        self._paired_device_repository.delete(source_id)

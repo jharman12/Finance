@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Callable
 
 from finance_app.services.voice.discovery import RemoteVoiceDiscoveryBrowser, RemoteVoiceDiscoveryDevice
+from finance_app.services.voice.pairing import PairingCodeGenerator
 from finance_app.services.voice.vad_endpointing import VoiceActivityEndpoint
 from finance_app.services.voice.wake_detector import OpenWakeWordDetector, VoskPhraseWakeDetector
 
@@ -172,6 +173,7 @@ class RemoteWakeStreamSender:
         self._grace_reset_pending = False
         self._discovery_browser: RemoteVoiceDiscoveryBrowser | None = None
         self._discovery_ready = threading.Event()
+        self._pairing_code: str | None = None
 
     def run(self) -> int:
         try:
@@ -300,6 +302,9 @@ class RemoteWakeStreamSender:
                 _log("Remote audio connection failed: no Finance Voice Receiver was discovered yet.")
                 self._cooldown_until = time.monotonic() + self.config.cooldown_seconds
                 return
+
+        self._pairing_code = PairingCodeGenerator.generate(self.config.token, self.config.source_id).code
+        _log(f"Pairing code for verification: {self._pairing_code}")
 
         connection = SecureRemoteAudioConnection(self.config)
         try:

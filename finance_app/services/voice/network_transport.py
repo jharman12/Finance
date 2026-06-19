@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Callable
 
 from finance_app.services.voice.discovery import RemoteVoiceDiscoveryPublisher
+from finance_app.services.voice.remote_config import RemoteVoiceConfigManager
 
 
 @dataclass(slots=True)

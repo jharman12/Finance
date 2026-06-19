@@ -273,3 +273,6 @@
 {"ts": "2026-06-19T20:41:00.590699+00:00", "event": "remote_audio_started", "bind_port": 45881, "local_mic_enabled": true}
 {"ts": "2026-06-19T20:44:14.549842+00:00", "event": "voice_started", "wake_mode": "phrase_vosk"}
 {"ts": "2026-06-19T20:44:14.550847+00:00", "event": "remote_audio_started", "bind_port": 45881, "local_mic_enabled": true}
+{"ts": "2026-06-19T21:42:27.538468+00:00", "event": "voice_started", "wake_mode": "phrase_vosk"}
+{"ts": "2026-06-19T21:53:05.884045+00:00", "event": "voice_stopped"}
+{"ts": "2026-06-19T21:53:07.475999+00:00", "event": "voice_stopped"}

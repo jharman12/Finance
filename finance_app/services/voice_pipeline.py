@@ -14,6 +14,7 @@ from finance_app.services.voice.asr_router import AsrRouter
 from finance_app.services.voice.asr_vosk import VoskAsrProvider
 from finance_app.services.voice.command_event import VoiceCommandEvent
 from finance_app.services.voice.postprocess import normalize_command_text
+from finance_app.services.voice.remote_config import RemoteVoiceConfigManager
 from finance_app.services.voice.remote_stream_source import RemoteStreamSource
 from finance_app.services.voice.session_state import VoiceSessionState
 from finance_app.services.voice.stream_source import MicStreamSource
@@ -618,6 +619,30 @@ class VoiceCoordinator:
             return None
 
         auth_token = os.getenv("FINANCE_APP_REMOTE_AUDIO_TOKEN", "").strip()
+        tls_cert_path = os.getenv("FINANCE_APP_REMOTE_AUDIO_TLS_CERT", "").strip() or None
+        tls_key_path = os.getenv("FINANCE_APP_REMOTE_AUDIO_TLS_KEY", "").strip() or None
+
+        if not auth_token or not tls_cert_path or not tls_key_path:
+            try:
+                config_manager = RemoteVoiceConfigManager()
+                creds = config_manager.get_credentials()
+                auth_token = auth_token or creds.auth_token
+
+                if not tls_cert_path:
+                    tls_cert_temp_path = Path.home() / ".finance-voice" / "tls-cert.pem"
+                    if tls_cert_temp_path.exists():
+                        tls_cert_path = str(tls_cert_temp_path)
+
+                if not tls_key_path:
+                    tls_key_temp_path = Path.home() / ".finance-voice" / "tls-key.pem"
+                    if tls_key_temp_path.exists():
+                        tls_key_path = str(tls_key_temp_path)
+            except Exception as exc:
+                telemetry = getattr(self, "telemetry", None)
+                if telemetry is not None:
+                    telemetry.log("remote_audio_disabled", reason="auto_config_failed", error=str(exc))
+                return None
+
         if len(auth_token) < 16:
             telemetry = getattr(self, "telemetry", None)
             if telemetry is not None:
@@ -628,12 +653,10 @@ class VoiceCoordinator:
                 )
             return None
 
-        host = os.getenv("FINANCE_APP_REMOTE_AUDIO_BIND_HOST", "127.0.0.1").strip() or "127.0.0.1"
+        host = os.getenv("FINANCE_APP_REMOTE_AUDIO_BIND_HOST", "0.0.0.0").strip() or "0.0.0.0"
         port = int(os.getenv("FINANCE_APP_REMOTE_AUDIO_PORT", "45881"))
         max_chunk_bytes = int(os.getenv("FINANCE_APP_REMOTE_AUDIO_MAX_CHUNK_BYTES", "32768"))
         max_mps = int(os.getenv("FINANCE_APP_REMOTE_AUDIO_MAX_MESSAGES_PER_SECOND", "120"))
-        tls_cert_path = os.getenv("FINANCE_APP_REMOTE_AUDIO_TLS_CERT", "").strip() or None
-        tls_key_path = os.getenv("FINANCE_APP_REMOTE_AUDIO_TLS_KEY", "").strip() or None
 
         return RemoteStreamSource(
             host=host,

@@ -2782,11 +2782,63 @@ class MainWindow(QMainWindow):
         layout.addWidget(title)
         layout.addWidget(subtitle)
 
+        self._build_remote_voice_settings_panel(layout)
+
         self._build_voice_surface_section(
             layout,
             mode="testing",
             output_placeholder="Recognized voice commands will appear here without being sent to the assistant...",
         )
+
+    def _build_remote_voice_settings_panel(self, layout: QVBoxLayout) -> None:
+        """Build the Remote Voice enable/disable settings panel."""
+        panel = QFrame()
+        panel.setObjectName("Panel")
+        panel_layout = QVBoxLayout(panel)
+        panel_layout.setContentsMargins(12, 10, 12, 10)
+        panel_layout.setSpacing(6)
+
+        panel_layout.addWidget(QLabel("Remote Voice Settings"))
+
+        enable_row = QHBoxLayout()
+        enable_row.addWidget(QLabel("Enable remote voice receiver:"))
+
+        self.remote_voice_toggle = QCheckBox()
+        self.remote_voice_toggle.setChecked(self._get_remote_voice_enabled())
+        self.remote_voice_toggle.toggled.connect(self._on_remote_voice_toggle)
+        enable_row.addWidget(self.remote_voice_toggle)
+        enable_row.addStretch()
+
+        panel_layout.addLayout(enable_row)
+
+        status_row = QHBoxLayout()
+        status_row.addWidget(QLabel("Status:"))
+        self.remote_voice_status_label = QLabel("Disconnected")
+        self.remote_voice_status_label.setObjectName("PageSubtitle")
+        status_row.addWidget(self.remote_voice_status_label)
+        status_row.addStretch()
+        panel_layout.addLayout(status_row)
+
+        layout.addWidget(panel)
+
+    def _get_remote_voice_enabled(self) -> bool:
+        """Get remote voice enabled state from app settings."""
+        setting = self.app_controller.get_setting("remote_voice_enabled", "0")
+        return setting in {"1", "true", "yes", "on"}
+
+    def _set_remote_voice_enabled(self, enabled: bool) -> None:
+        """Set remote voice enabled state in app settings."""
+        self.app_controller.set_setting("remote_voice_enabled", "1" if enabled else "0")
+
+    def _on_remote_voice_toggle(self, checked: bool) -> None:
+        """Handle remote voice enable/disable toggle."""
+        self._set_remote_voice_enabled(checked)
+        if checked:
+            self.remote_voice_status_label.setText("Enabled - waiting for pairs...")
+            self.voice_coordinator._remote_audio_enabled = True
+        else:
+            self.remote_voice_status_label.setText("Disabled")
+            self.voice_coordinator._remote_audio_enabled = False
 
     def _build_voice_surface_section(
         self,
@@ -2819,6 +2871,16 @@ class MainWindow(QMainWindow):
         wake_row.addWidget(wake_apply_button)
         layout.addLayout(wake_row)
 
+        last_command_label = QLabel("Last voice command: (none)")
+        last_command_label.setObjectName("PageSubtitle")
+        last_command_label.setWordWrap(True)
+        layout.addWidget(last_command_label)
+
+        partial_label = QLabel("Live transcript: (waiting)")
+        partial_label.setObjectName("PageSubtitle")
+        partial_label.setWordWrap(True)
+        layout.addWidget(partial_label)
+
         devices_panel = QFrame()
         devices_panel.setObjectName("Panel")
         devices_layout = QVBoxLayout(devices_panel)
@@ -2829,16 +2891,7 @@ class MainWindow(QMainWindow):
         devices_list = QListWidget()
         devices_list.setMaximumHeight(120)
         devices_layout.addWidget(devices_list)
-
         layout.addWidget(devices_panel)
-        last_command_label.setObjectName("PageSubtitle")
-        last_command_label.setWordWrap(True)
-        layout.addWidget(last_command_label)
-
-        partial_label = QLabel("Live transcript: (waiting)")
-        partial_label.setObjectName("PageSubtitle")
-        partial_label.setWordWrap(True)
-        layout.addWidget(partial_label)
 
         diagnostics_panel = QFrame()
         diagnostics_panel.setObjectName("Panel")

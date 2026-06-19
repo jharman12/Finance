@@ -99,6 +99,22 @@ class Asset:
 
 
 @dataclass(slots=True)
+class PairedRemoteDevice:
+    """Paired remote voice device saved after successful pairing."""
+
+    id: int | None
+    source_id: str
+    device_name: str
+    host_ip: str
+    port: int
+    role: str
+    protocol_version: str
+    paired_at: datetime
+    last_connected_at: datetime | None = None
+    is_active: bool = True
+
+
+@dataclass(slots=True)
 class SummarySnapshot:
     income_total: float = 0.0
     expense_total: float = 0.0
