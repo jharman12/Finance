@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import hmac
 import json
+import os
 import socket
 import socketserver
 import ssl
@@ -57,6 +58,7 @@ class RemoteAudioServer:
         self._server: _ThreadingTcpServer | None = None
         self._thread: threading.Thread | None = None
         self._stop_event = threading.Event()
+        self._debug = os.getenv("FINANCE_APP_REMOTE_AUDIO_DEBUG", "0").strip().lower() in {"1", "true", "yes", "on"}
 
         self.on_packet: Callable[[RemoteAudioPacket], None] | None = None
         self.on_status: Callable[[str], None] | None = None
@@ -88,10 +90,13 @@ class RemoteAudioServer:
                 last_seq = -1
                 window: deque[float] = deque(maxlen=512)
                 tls_enabled = False
+                packet_count = 0
 
                 sock = self.request
                 if isinstance(sock, ssl.SSLSocket):
                     tls_enabled = True
+
+                outer._debug_log(f"Connection accepted from {self.client_address}, tls={tls_enabled}")
 
                 while not outer._stop_event.is_set():
                     raw = self.rfile.readline()
@@ -121,6 +126,7 @@ class RemoteAudioServer:
                         return
 
                     if msg_type == "ping":
+                        outer._debug_log(f"Ping received from {source_id or self.client_address}")
                         continue
 
                     if not authenticated:
@@ -135,11 +141,13 @@ class RemoteAudioServer:
                             return
                         if not hmac.compare_digest(token, outer.auth_token):
                             outer._emit_diagnostic(event="auth_rejected", source_id=source_id_candidate)
+                            outer._debug_log(f"Auth rejected for source_id={source_id_candidate}")
                             return
 
                         source_id = source_id_candidate
                         authenticated = True
                         outer._emit_diagnostic(event="client_authenticated", source_id=source_id, tls=tls_enabled)
+                        outer._debug_log(f"Client authenticated source_id={source_id}, tls={tls_enabled}")
                         continue
 
                     if msg_type != "audio":
@@ -186,6 +194,11 @@ class RemoteAudioServer:
                         parsed_sent_at = sent_at_ms
 
                     last_seq = seq_no
+                    packet_count += 1
+                    if packet_count == 1 or (packet_count % 50) == 0:
+                        outer._debug_log(
+                            f"Audio packet from source_id={source_id} seq={seq_no} bytes={len(payload)} count={packet_count}"
+                        )
                     packet = RemoteAudioPacket(
                         source_id=source_id,
                         seq_no=seq_no,
@@ -210,6 +223,7 @@ class RemoteAudioServer:
         self._thread = threading.Thread(target=self._serve, name="RemoteAudioServer", daemon=True)
         self._thread.start()
         self._emit_status(f"Remote audio server listening on {self.host}:{self.bound_port}")
+        self._debug_log(f"RemoteAudioServer started host={self.host} port={self.bound_port} debug={self._debug}")
 
     def stop(self) -> None:
         self._stop_event.set()
@@ -249,3 +263,8 @@ class RemoteAudioServer:
     def _emit_diagnostic(self, **payload: object) -> None:
         if self.on_diagnostic:
             self.on_diagnostic(dict(payload))
+
+    def _debug_log(self, message: str) -> None:
+        if not self._debug:
+            return
+        print(f"[RemoteAudioServer DEBUG] {message}")

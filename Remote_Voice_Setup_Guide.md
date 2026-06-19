@@ -233,7 +233,7 @@ On the remote device, set these environment variables in PowerShell:
 ```powershell
 $env:FINANCE_APP_REMOTE_AUDIO_HOST="192.168.1.20"
 $env:FINANCE_APP_REMOTE_AUDIO_PORT="45881"
-$env:FINANCE_APP_REMOTE_AUDIO_TOKEN="PASTE_YOUR_RANDOM_TOKEN_HERE"
+$env:FINANCE_APP_REMOTE_AUDIO_TOKEN="0FrjneiGVGxdvnveVFZUh5QJnDpVma1hOAJgo7QWptM"
 $env:FINANCE_APP_REMOTE_AUDIO_CA_CERT="C:\FinanceVoice\finance-voice-cert.pem"
 $env:FINANCE_APP_REMOTE_AUDIO_TLS_SERVER_NAME="192.168.1.20"
 $env:FINANCE_APP_REMOTE_SOURCE_ID="kitchen-node"
@@ -318,6 +318,38 @@ If those do not match, TLS verification can fail.
 
 The remote sender needs a local model for `phrase_vosk` wake detection.
 
+If you see:
+
+```text
+Wake detector failed to start: Failed to create a model
+```
+
+it almost always means the Vosk model path is wrong or points to the wrong folder level.
+
+The path must point to the model root directory (the folder that contains `am`, `conf`, and `graph`).
+
+Correct example:
+
+```text
+C:\FinanceVoice\models\vosk-model-en-us-0.22-lgraph
+```
+
+Incorrect examples:
+
+```text
+C:\FinanceVoice\models\vosk-model-en-us-0.22-lgraph\am
+C:\FinanceVoice\models
+```
+
+Quick checks on the remote device:
+
+```powershell
+Test-Path "C:\FinanceVoice\models\vosk-model-en-us-0.22-lgraph"
+Get-ChildItem "C:\FinanceVoice\models\vosk-model-en-us-0.22-lgraph"
+```
+
+You should see subfolders like `am`, `conf`, and `graph`.
+
 ### 4. Main PC still bound to localhost only
 
 If the main PC uses `127.0.0.1`, remote devices cannot reach it.
@@ -331,6 +363,87 @@ $env:FINANCE_APP_REMOTE_AUDIO_BIND_HOST="0.0.0.0"
 ### 5. Windows firewall blocks the port
 
 If needed, allow inbound TCP on port `45881` for your private network.
+
+### 6. Remote says: `Remote audio connection failed: timed out`
+
+This means wake was detected locally, but the remote device could not establish a TCP/TLS session to the main PC in time.
+
+Use this checklist in order:
+
+1. Confirm main app remote server is enabled on main PC:
+
+```powershell
+$env:FINANCE_APP_REMOTE_AUDIO_ENABLED="1"
+$env:FINANCE_APP_REMOTE_AUDIO_BIND_HOST="0.0.0.0"
+$env:FINANCE_APP_REMOTE_AUDIO_PORT="45881"
+```
+
+2. Confirm main PC can listen on the port:
+
+```powershell
+netstat -ano | findstr :45881
+```
+
+You should see a `LISTENING` entry.
+
+3. Confirm remote device can reach the main PC port:
+
+```powershell
+Test-NetConnection 192.168.1.20 -Port 45881
+```
+
+`TcpTestSucceeded` must be `True`.
+
+4. Verify TLS host identity matches cert:
+
+- if cert was created for `192.168.1.20`, set:
+
+```powershell
+$env:FINANCE_APP_REMOTE_AUDIO_HOST="192.168.1.20"
+$env:FINANCE_APP_REMOTE_AUDIO_TLS_SERVER_NAME="192.168.1.20"
+```
+
+5. Verify token exactly matches on both machines.
+
+## Debug print mode (both sides)
+
+You can now enable verbose debug output.
+
+### Main PC debug
+
+Before starting the app:
+
+```powershell
+$env:FINANCE_APP_REMOTE_AUDIO_DEBUG="1"
+```
+
+You will see logs like:
+
+- connection accepted
+- client authenticated
+- first/periodic audio packet counts
+
+### Remote sender debug
+
+Run with:
+
+```powershell
+python remote_voice_sender.py --debug
+```
+
+Or set:
+
+```powershell
+$env:FINANCE_APP_REMOTE_DEBUG="1"
+```
+
+You will see logs like:
+
+- wake trigger detected
+- TLS connect target and server name
+- hello sent
+- first/periodic audio packet sends
+- detailed connection timeout context
 
 ## If you do not have OpenSSL
 

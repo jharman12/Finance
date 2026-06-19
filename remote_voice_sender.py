@@ -39,6 +39,16 @@ def _log(message: str) -> None:
     print(f"[{timestamp}] {message}")
 
 
+def _debug_enabled() -> bool:
+    return _bool_env("FINANCE_APP_REMOTE_DEBUG", False)
+
+
+def _debug(message: str) -> None:
+    if not _debug_enabled():
+        return
+    _log(f"DEBUG: {message}")
+
+
 @dataclass(slots=True)
 class SenderConfig:
     host: str
@@ -81,10 +91,15 @@ class SecureRemoteAudioConnection:
         context = ssl.create_default_context(ssl.Purpose.SERVER_AUTH, cafile=str(cafile))
         context.minimum_version = ssl.TLSVersion.TLSv1_2
 
+        _debug(
+            f"Connecting to {self.config.host}:{self.config.port} with TLS server name "
+            f"'{self.config.tls_server_name or self.config.host}'"
+        )
         raw_socket = socket.create_connection((self.config.host, self.config.port), timeout=5.0)
         try:
             server_name = self.config.tls_server_name or self.config.host
             self._socket = context.wrap_socket(raw_socket, server_hostname=server_name)
+            _debug("TLS handshake complete. Sending hello message.")
             self._send_json(
                 {
                     "type": "hello",
@@ -92,6 +107,7 @@ class SecureRemoteAudioConnection:
                     "source_id": self.config.source_id,
                 }
             )
+            _debug("Hello message sent.")
         except Exception:
             raw_socket.close()
             self._socket = None
@@ -104,6 +120,8 @@ class SecureRemoteAudioConnection:
             raise RuntimeError("Remote audio connection is not open.")
 
         self._seq_no += 1
+        if self._seq_no == 1 or (self._seq_no % 50) == 0:
+            _debug(f"Sending audio seq={self._seq_no} bytes={len(chunk)}")
         self._send_json(
             {
                 "type": "audio",
@@ -163,6 +181,9 @@ class RemoteWakeStreamSender:
             self.wake_detector.start()
         except Exception as exc:
             _log(f"Wake detector failed to start: {exc}")
+            hint = self._wake_detector_start_hint()
+            if hint:
+                _log(hint)
             return 2
 
         def callback(indata, frames, time_info, status) -> None:  # type: ignore[no-untyped-def]
@@ -218,6 +239,7 @@ class RemoteWakeStreamSender:
             if now < self._cooldown_until:
                 return
             if self._detect_wake(chunk):
+                _debug("Wake detector returned true; opening remote stream.")
                 self._open_stream(now)
             return
 
@@ -247,11 +269,19 @@ class RemoteWakeStreamSender:
         connection = SecureRemoteAudioConnection(self.config)
         try:
             connection.connect()
+            _debug(f"Sending preroll buffer chunks={len(self._preroll_buffer)}")
             for buffered_chunk in self._preroll_buffer:
                 connection.send_audio(buffered_chunk)
         except Exception as exc:
             connection.close()
-            _log(f"Remote audio connection failed: {exc}")
+            _log(
+                "Remote audio connection failed: "
+                f"{exc} (target={self.config.host}:{self.config.port}, tls_name={self.config.tls_server_name or self.config.host})"
+            )
+            _log(
+                "Check: main PC app running with remote audio enabled, bind host set for LAN, firewall open on port, "
+                "and TLS cert/server name match."
+            )
             self._cooldown_until = time.monotonic() + self.config.cooldown_seconds
             return
 
@@ -302,6 +332,42 @@ class RemoteWakeStreamSender:
             wake_phrase=self.config.wake_phrase,
         )
 
+    def _wake_detector_start_hint(self) -> str:
+        wake_mode = self.config.wake_mode.strip().lower()
+        if wake_mode == "phrase_vosk":
+            model_path = (self.config.vosk_model_path or "").strip()
+            if not model_path:
+                return (
+                    "Set FINANCE_APP_REMOTE_VOSK_MODEL_PATH to the root Vosk model folder, "
+                    "for example C:\\FinanceVoice\\models\\vosk-model-en-us-0.22-lgraph"
+                )
+
+            resolved = Path(model_path).expanduser().resolve()
+            if not resolved.exists():
+                return f"Vosk model path does not exist: {resolved}"
+
+            missing = [name for name in ("am", "conf", "graph") if not (resolved / name).exists()]
+            if missing:
+                joined = ", ".join(missing)
+                return (
+                    f"Vosk model folder looks invalid ({resolved}). Missing expected subfolders: {joined}. "
+                    "Point to the model root directory, not a nested subfolder."
+                )
+
+            return f"Vosk model path detected: {resolved}"
+
+        if wake_mode == "openwakeword":
+            model_path = (self.config.openwakeword_model_path or "").strip()
+            if not model_path:
+                return "Set FINANCE_APP_REMOTE_OPENWAKEWORD_MODEL_PATH to your custom wake model file."
+
+            resolved = Path(model_path).expanduser().resolve()
+            if not resolved.exists():
+                return f"OpenWakeWord model file does not exist: {resolved}"
+            return f"OpenWakeWord model path detected: {resolved}"
+
+        return ""
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -311,6 +377,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--port", type=int, default=int(_env("FINANCE_APP_REMOTE_AUDIO_PORT", "45881")))
     parser.add_argument("--token", default=_env("FINANCE_APP_REMOTE_AUDIO_TOKEN", ""))
     parser.add_argument("--source-id", default=_env("FINANCE_APP_REMOTE_SOURCE_ID", socket.gethostname()))
+    parser.add_argument("--debug", action="store_true")
     parser.add_argument("--ca-cert", default=_env("FINANCE_APP_REMOTE_AUDIO_CA_CERT", ""))
     parser.add_argument("--tls-server-name", default=_env("FINANCE_APP_REMOTE_AUDIO_TLS_SERVER_NAME", ""))
     parser.add_argument("--wake-phrase", default=_env("FINANCE_APP_REMOTE_WAKE_PHRASE", "hey steven"))
@@ -415,6 +482,10 @@ def main(argv: list[str] | None = None) -> int:
     except ValueError as exc:
         parser.error(str(exc))
         return 2
+
+    if args.debug:
+        os.environ["FINANCE_APP_REMOTE_DEBUG"] = "1"
+    _debug("Remote sender debug logging enabled.")
 
     sender = RemoteWakeStreamSender(config)
     return sender.run()
