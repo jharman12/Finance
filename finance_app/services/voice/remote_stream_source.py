@@ -17,6 +17,7 @@ class RemoteStreamSource:
         max_messages_per_second: int = 120,
         tls_cert_path: str | None = None,
         tls_key_path: str | None = None,
+        pairing_manager: object | None = None,
     ) -> None:
         self.server = RemoteAudioServer(
             host=host,
@@ -26,6 +27,7 @@ class RemoteStreamSource:
             max_messages_per_second=max_messages_per_second,
             tls_cert_path=tls_cert_path,
             tls_key_path=tls_key_path,
+            pairing_manager=pairing_manager,
         )
 
     @property

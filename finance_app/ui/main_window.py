@@ -2819,6 +2819,14 @@ class MainWindow(QMainWindow):
         status_row.addStretch()
         panel_layout.addLayout(status_row)
 
+        pair_button_row = QHBoxLayout()
+        self.pair_new_device_button = QPushButton("Pair New Device")
+        self.pair_new_device_button.clicked.connect(self._on_pair_new_device_clicked)
+        self.pair_new_device_button.setMaximumWidth(200)
+        pair_button_row.addWidget(self.pair_new_device_button)
+        pair_button_row.addStretch()
+        panel_layout.addLayout(pair_button_row)
+
         layout.addWidget(panel)
 
     def _get_remote_voice_enabled(self) -> bool:
@@ -2839,6 +2847,55 @@ class MainWindow(QMainWindow):
         else:
             self.remote_voice_status_label.setText("Disabled")
             self.voice_coordinator._remote_audio_enabled = False
+
+    def _on_pair_new_device_clicked(self) -> None:
+        """Handle 'Pair New Device' button clicked."""
+        from finance_app.ui.device_pairing_dialog import DevicePairingDialog
+        from finance_app.services.voice.remote_config import RemoteVoiceConfigManager
+
+        try:
+            config_manager = RemoteVoiceConfigManager()
+            credentials = config_manager.get_credentials()
+            auth_token = credentials.auth_token
+        except Exception as exc:
+            # Log error and show message
+            from PyQt5.QtWidgets import QMessageBox
+            QMessageBox.warning(
+                self,
+                "Error",
+                f"Failed to get authentication token: {exc}"
+            )
+            return
+
+        pairing_manager = None
+        if self.voice_coordinator and hasattr(self.voice_coordinator, 'pairing_manager'):
+            pairing_manager = self.voice_coordinator.pairing_manager
+
+        dialog = DevicePairingDialog(auth_token, pairing_manager=pairing_manager, parent=self)
+        dialog.pairing_confirmed.connect(self._on_device_pairing_confirmed)
+        dialog.pairing_cancelled.connect(self._on_device_pairing_cancelled)
+        
+        # Wire pairing manager callback to notify dialog
+        if pairing_manager is not None:
+            def on_pairing_confirmed(source_id: str, pairing_code: str) -> None:
+                dialog.on_pairing_confirmed(source_id, pairing_code)
+            pairing_manager.set_callbacks(on_confirmed=on_pairing_confirmed)
+        
+        dialog.exec_()
+
+    def _on_device_pairing_confirmed(self, source_id: str, pairing_code: str) -> None:
+        """Handle device pairing confirmed."""
+        from PyQt5.QtWidgets import QMessageBox
+        QMessageBox.information(
+            self,
+            "Device Paired",
+            f"Successfully paired device: {source_id}\n\nPariring code: {pairing_code}"
+        )
+
+    def _on_device_pairing_cancelled(self) -> None:
+        """Handle device pairing cancelled."""
+        pass
+
 
     def _build_voice_surface_section(
         self,

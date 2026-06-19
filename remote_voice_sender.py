@@ -15,7 +15,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-from finance_app.services.voice.discovery import RemoteVoiceDiscoveryBrowser, RemoteVoiceDiscoveryDevice
+from finance_app.services.voice.discovery import (
+    RemoteVoiceDiscoveryBrowser,
+    RemoteVoiceDiscoveryDevice,
+    RemoteVoiceDiscoveryPublisher,
+    SERVICE_TYPE_SENDER,
+)
 from finance_app.services.voice.pairing import PairingCodeGenerator
 from finance_app.services.voice.vad_endpointing import VoiceActivityEndpoint
 from finance_app.services.voice.wake_detector import OpenWakeWordDetector, VoskPhraseWakeDetector
@@ -77,8 +82,9 @@ class SenderConfig:
 
 
 class SecureRemoteAudioConnection:
-    def __init__(self, config: SenderConfig) -> None:
+    def __init__(self, config: SenderConfig, pairing_code: str | None = None) -> None:
         self.config = config
+        self.pairing_code = pairing_code or ""
         self._socket: ssl.SSLSocket | None = None
         self._seq_no = 0
 
@@ -107,6 +113,7 @@ class SecureRemoteAudioConnection:
                     "type": "hello",
                     "token": self.config.token,
                     "source_id": self.config.source_id,
+                    "pairing_code": self.pairing_code,
                 }
             )
             _debug("Hello message sent.")
@@ -173,6 +180,7 @@ class RemoteWakeStreamSender:
         self._grace_reset_pending = False
         self._discovery_browser: RemoteVoiceDiscoveryBrowser | None = None
         self._discovery_ready = threading.Event()
+        self._discovery_publisher: RemoteVoiceDiscoveryPublisher | None = None
         self._pairing_code: str | None = None
 
     def run(self) -> int:
@@ -196,6 +204,19 @@ class RemoteWakeStreamSender:
             _log("Browsing the local network for the Finance Voice Receiver.")
         elif not self.config.host:
             _log("mDNS discovery is unavailable. Set --host or FINANCE_APP_REMOTE_AUDIO_HOST manually.")
+
+        self._discovery_publisher = RemoteVoiceDiscoveryPublisher(
+            source_id=self.config.source_id,
+            port=0,  # Sender doesn't listen; port is for identification only
+            device_name=f"Remote Voice Sender ({self.config.source_id[:8]})",
+            role="remote-sender",
+            protocol_version="1",
+        )
+        if self._discovery_publisher.start():
+            _log(f"Advertising as remote device '{self._discovery_publisher.device_name}' on the network.")
+        else:
+            _log("Failed to advertise on network; pairing from main app may not discover this device.")
+
 
         def callback(indata, frames, time_info, status) -> None:  # type: ignore[no-untyped-def]
             del frames, time_info
@@ -235,6 +256,11 @@ class RemoteWakeStreamSender:
             if self._discovery_browser is not None:
                 try:
                     self._discovery_browser.stop()
+                except Exception:
+                    pass
+            if self._discovery_publisher is not None:
+                try:
+                    self._discovery_publisher.stop()
                 except Exception:
                     pass
             try:
@@ -306,7 +332,7 @@ class RemoteWakeStreamSender:
         self._pairing_code = PairingCodeGenerator.generate(self.config.token, self.config.source_id).code
         _log(f"Pairing code for verification: {self._pairing_code}")
 
-        connection = SecureRemoteAudioConnection(self.config)
+        connection = SecureRemoteAudioConnection(self.config, pairing_code=self._pairing_code)
         try:
             connection.connect()
             _debug(f"Sending preroll buffer chunks={len(self._preroll_buffer)}")

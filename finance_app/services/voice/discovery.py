@@ -5,7 +5,9 @@ import socket
 from dataclasses import dataclass
 from typing import Any, Callable
 
-SERVICE_TYPE = "_finance-voice._tcp.local."
+SERVICE_TYPE_RECEIVER = "_finance-voice._tcp.local."
+SERVICE_TYPE_SENDER = "_finance-voice-sender._tcp.local."
+SERVICE_TYPE = SERVICE_TYPE_RECEIVER  # Default for backward compatibility
 
 _zeroconf_module = None
 try:

@@ -119,6 +119,8 @@ class VoiceCoordinator:
     """
 
     def __init__(self, wake_phrase: str = "hey steven") -> None:
+        from finance_app.services.voice.pairing_manager import RemoteVoicePairingManager
+        
         self.router = WakeWordCommandRouter(wake_phrase=wake_phrase)
         self.sample_rate = 16000
         self.source_id = "local-usb-mic"
@@ -138,6 +140,7 @@ class VoiceCoordinator:
             "yes",
             "on",
         }
+        self.pairing_manager = RemoteVoicePairingManager()
         self.remote_stream: RemoteStreamSource | None = self._build_remote_stream_source()
         self.endpoint = VoiceActivityEndpoint(
             min_speech_ms=int(os.getenv("FINANCE_APP_VOICE_MIN_UTTERANCE_MS", "300")),
@@ -666,6 +669,7 @@ class VoiceCoordinator:
             max_messages_per_second=max_mps,
             tls_cert_path=tls_cert_path,
             tls_key_path=tls_key_path,
+            pairing_manager=self.pairing_manager,
         )
 
     def _in_cooldown_locked(self) -> bool:

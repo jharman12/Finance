@@ -49,6 +49,7 @@ class RemoteAudioServer:
         max_messages_per_second: int = 120,
         tls_cert_path: str | None = None,
         tls_key_path: str | None = None,
+        pairing_manager: object | None = None,
     ) -> None:
         self.host = host
         self.port = port
@@ -57,6 +58,7 @@ class RemoteAudioServer:
         self.max_messages_per_second = max(10, int(max_messages_per_second))
         self.tls_cert_path = tls_cert_path
         self.tls_key_path = tls_key_path
+        self.pairing_manager = pairing_manager
 
         self._server: _ThreadingTcpServer | None = None
         self._thread: threading.Thread | None = None
@@ -153,6 +155,13 @@ class RemoteAudioServer:
                         authenticated = True
                         outer._emit_diagnostic(event="client_authenticated", source_id=source_id, tls=tls_enabled)
                         outer._debug_log(f"Client authenticated source_id={source_id}, tls={tls_enabled}")
+                        
+                        # Check pairing code if present
+                        pairing_code = str(msg.get("pairing_code", "")).strip()
+                        if pairing_code and outer.pairing_manager is not None:
+                            if hasattr(outer.pairing_manager, 'verify_pairing_code'):
+                                pairing_verified = outer.pairing_manager.verify_pairing_code(source_id, pairing_code)
+                                outer._debug_log(f"Pairing code verification for {source_id}: {pairing_verified}")
                         continue
 
                     if msg_type != "audio":
