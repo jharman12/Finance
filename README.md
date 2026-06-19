@@ -144,6 +144,33 @@ Full setup guide:
 
 `Remote_Voice_Setup_Guide.md`
 
+Quick launch scripts:
+
+- `scripts/start_main_pc_remote_voice.ps1`
+- `scripts/start_remote_sender.ps1`
+
+Example main PC launch:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\start_main_pc_remote_voice.ps1 `
+	-RemoteAudioToken "PASTE_TOKEN" `
+	-TlsCertPath "C:\FinanceVoiceTls\finance-voice-cert.pem" `
+	-TlsKeyPath "C:\FinanceVoiceTls\finance-voice-key.pem" `
+	-EnableRemoteDebug
+```
+
+Example remote device launch:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\start_remote_sender.ps1 `
+	-Host "192.168.1.20" `
+	-RemoteAudioToken "PASTE_TOKEN" `
+	-CaCertPath "C:\FinanceVoice\finance-voice-cert.pem" `
+	-VoskModelPath "C:\FinanceVoice\models\vosk-model-en-us-0.22-lgraph" `
+	-SourceId "kitchen-node" `
+	-EnableDebug
+```
+
 ### Remote sender dependencies
 
 For the remote device, the minimum useful packages are:
