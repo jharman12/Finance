@@ -5,6 +5,7 @@ from unittest.mock import Mock
 
 from PyQt5.QtWidgets import QApplication
 
+from finance_app.services.voice.command_event import VoiceCommandEvent
 from finance_app.ui.main_window import MainWindow
 
 
@@ -22,6 +23,28 @@ class VoiceTestTabRoutingTests(unittest.TestCase):
             window._handle_voice_command("test spoken phrase")
 
             self.assertEqual(window.voice_test_output.toPlainText().strip(), "test spoken phrase")
+            window.send_prompt.assert_not_called()
+        finally:
+            window.close()
+
+    def test_testing_mode_structured_command_does_not_send_prompt(self) -> None:
+        window = MainWindow()
+        try:
+            window.send_prompt = Mock()
+            window._voice_active_surface = "testing"  # noqa: SLF001
+
+            window._handle_voice_command(
+                VoiceCommandEvent(
+                    text="test structured phrase",
+                    source_id="node-1",
+                    session_id="voice-1",
+                    provider="fake",
+                    confidence_0_1=0.91,
+                    latency_ms=37.0,
+                )
+            )
+
+            self.assertEqual(window.voice_test_output.toPlainText().strip(), "test structured phrase")
             window.send_prompt.assert_not_called()
         finally:
             window.close()

@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 import csv
+from collections import deque
 from datetime import date
 import calendar
 import html
@@ -49,6 +50,12 @@ from finance_app.config import APP_NAME
 from finance_app.chart_models import CashflowChartsPayload, PositionChartsPayload
 from finance_app.models import Asset, AssistantResult, Transaction
 from finance_app.services.assistant_service import AssistantService
+from finance_app.services.voice.action_safety import (
+    evaluate_voice_command_event,
+    is_confirmation_phrase,
+    is_rejection_phrase,
+)
+from finance_app.services.voice.command_event import VoiceCommandEvent
 from finance_app.services.voice_pipeline import VoiceCoordinator
 from finance_app.storage import FinanceRepository
 from finance_app.ui.controllers.app_controller import AppController
@@ -65,7 +72,7 @@ class MainWindow(QMainWindow):
     voice_status_signal = pyqtSignal(str)
     voice_error_signal = pyqtSignal(str)
     voice_wake_signal = pyqtSignal(str)
-    voice_command_signal = pyqtSignal(str)
+    voice_command_signal = pyqtSignal(object)
     voice_partial_signal = pyqtSignal(str)
     voice_diagnostic_signal = pyqtSignal(object)
 
@@ -89,6 +96,14 @@ class MainWindow(QMainWindow):
         self.voice_enabled = False
         self._voice_active_surface: str | None = None
         self._voice_ui: dict[str, dict[str, object]] = {}
+        self._voice_pending_confirmations: dict[str, VoiceCommandEvent] = {}
+        self._processed_voice_command_ids: set[str] = set()
+        self._processed_voice_command_order: deque[str] = deque(maxlen=128)
+        self._voice_auto_execute_threshold = 0.80
+        self._voice_confirm_threshold = 0.60
+        self._pending_assistant_session_key: str | None = None
+        self._pending_assistant_request_context: dict[str, object] | None = None
+        self._active_assistant_request_context: dict[str, object] | None = None
         self._assistant_worker: AssistantWorker | None = None
         self._ollama_warmup_worker: OllamaWarmupWorker | None = None
         self._selected_year = date.today().year
@@ -4214,6 +4229,14 @@ class MainWindow(QMainWindow):
         if not prompt_text:
             return
 
+        session_key = self._pending_assistant_session_key or "typed-assistant"
+        request_context = self._pending_assistant_request_context or {
+            "request_source": "typed",
+            "assistant_session_key": session_key,
+        }
+        self._pending_assistant_session_key = None
+        self._pending_assistant_request_context = None
+
         if self._ollama_warmup_worker is not None and self._ollama_warmup_worker.isRunning():
             QMessageBox.information(self, APP_NAME, "Ollama is still starting. Try again in a moment.")
             return
@@ -4227,7 +4250,13 @@ class MainWindow(QMainWindow):
         self.send_button.setEnabled(False)
         self.status_bar.showMessage("Checking Ollama before sending the question...", 0)
         self._ollama_warmup_worker = OllamaWarmupWorker(self.assistant_service)
-        self._ollama_warmup_worker.ready.connect(lambda: self._send_prompt_after_warmup(prompt_text))
+        self._ollama_warmup_worker.ready.connect(
+            lambda: self._send_prompt_after_warmup(
+                prompt_text,
+                session_key=session_key,
+                request_context=request_context,
+            )
+        )
         self._ollama_warmup_worker.failed.connect(self._handle_ollama_failure)
         self._ollama_warmup_worker.start()
 
@@ -4241,13 +4270,22 @@ class MainWindow(QMainWindow):
         self._ollama_warmup_worker.failed.connect(self._handle_ollama_failure)
         self._ollama_warmup_worker.start()
 
-    def _send_prompt_after_warmup(self, prompt_text: str) -> None:
+    def _send_prompt_after_warmup(
+        self,
+        prompt_text: str,
+        session_key: str = "typed-assistant",
+        request_context: dict[str, object] | None = None,
+    ) -> None:
         self.chat_input.clear()
         self.chat_log.append(f"<b>You:</b> {prompt_text}")
         self.send_button.setEnabled(False)
         self.status_bar.showMessage("Thinking with the local assistant...", 0)
+        self._active_assistant_request_context = request_context or {
+            "request_source": "typed",
+            "assistant_session_key": session_key,
+        }
 
-        self._assistant_worker = AssistantWorker(self.assistant_service, prompt_text)
+        self._assistant_worker = AssistantWorker(self.assistant_service, prompt_text, session_key=session_key)
         self._assistant_worker.result_ready.connect(self._handle_assistant_result)
         self._assistant_worker.failed.connect(self._handle_assistant_failure)
         self._assistant_worker.start()
@@ -4397,14 +4435,89 @@ class MainWindow(QMainWindow):
         widgets["diag_speech_ms"].setText(speech_ms)  # type: ignore[call-arg]
         widgets["diag_wake_mode"].setText(wake_mode)  # type: ignore[call-arg]
 
-    def _handle_voice_command(self, command_text: str) -> None:
+    def _handle_voice_command(self, payload: object) -> None:
+        command_event: VoiceCommandEvent | None = payload if isinstance(payload, VoiceCommandEvent) else None
+        command_text = command_event.text if command_event is not None else str(payload or "")
         if not command_text.strip():
             return
         mode = self._voice_active_surface or "assistant"
+
+        if command_event is not None:
+            if self._is_duplicate_voice_command_event(command_event):
+                self._log_voice_ui_event(
+                    "voice_command_duplicate_ignored",
+                    source_id=command_event.source_id,
+                    session_id=command_event.session_id,
+                    text=command_event.text,
+                )
+                self.status_bar.showMessage("Duplicate voice command ignored.", 2500)
+                return
+            self._remember_voice_command_event(command_event)
+
+        if mode == "assistant":
+            if self._handle_pending_voice_confirmation(payload):
+                return
+
+            if command_event is not None:
+                decision = evaluate_voice_command_event(
+                    command_event,
+                    auto_execute_threshold=self._voice_auto_execute_threshold,
+                    confirm_threshold=self._voice_confirm_threshold,
+                )
+                if decision.mode == "clarify":
+                    self._log_voice_ui_event(
+                        "voice_command_clarify_requested",
+                        source_id=command_event.source_id,
+                        session_id=command_event.session_id,
+                        confidence=command_event.confidence_0_1,
+                    )
+                    self.chat_log.append("<i>Voice confidence too low. Please repeat your request.</i>")
+                    self.status_bar.showMessage("Voice command unclear. Please repeat.", 3500)
+                    self._set_voice_surface_partial_text(mode, "Live transcript: (clarify)")
+                    return
+
+                if decision.mode == "confirm":
+                    session_key = self._voice_confirmation_session_key(command_event)
+                    self._voice_pending_confirmations[session_key] = command_event
+                    self._log_voice_ui_event(
+                        "voice_command_confirmation_requested",
+                        source_id=command_event.source_id,
+                        session_id=command_event.session_id,
+                        confidence=command_event.confidence_0_1,
+                    )
+                    self.chat_log.append(
+                        f"<i>I heard: {html.escape(command_event.text)}. Say 'confirm' to run it or 'cancel' to ignore.</i>"
+                    )
+                    self.status_bar.showMessage("Awaiting voice confirmation.", 4000)
+                    self._set_voice_surface_partial_text(mode, "Live transcript: (awaiting confirmation)")
+                    return
+
         self._set_voice_surface_last_command_text(mode, f"Last voice command: {command_text}")
         self._set_voice_surface_partial_text(mode, "Live transcript: (sent)")
 
+        if command_event is not None:
+            self._handle_voice_diagnostic(
+                {
+                    "stage": "dispatch",
+                    "provider": command_event.provider,
+                    "confidence": command_event.confidence_0_1,
+                    "latency_ms": command_event.latency_ms,
+                    "fallback_reason": command_event.fallback_reason or "none",
+                    "source_id": command_event.source_id,
+                }
+            )
+
         if mode == "assistant":
+            if command_event is not None:
+                self._pending_assistant_session_key = self._voice_assistant_session_key(command_event.source_id)
+                self._pending_assistant_request_context = {
+                    "request_source": "voice",
+                    "assistant_session_key": self._voice_assistant_session_key(command_event.source_id),
+                    "source_id": command_event.source_id,
+                    "command_session_id": command_event.session_id,
+                    "provider": command_event.provider,
+                    "confidence": command_event.confidence_0_1,
+                }
             self.chat_input.setText(command_text)
             self.chat_log.append(f"<b>You (voice):</b> {html.escape(command_text)}")
             self.send_prompt()
@@ -4413,6 +4526,95 @@ class MainWindow(QMainWindow):
         output_box = self._voice_output_box(mode)
         if output_box is not None:
             output_box.append(command_text)
+
+    def _handle_pending_voice_confirmation(self, payload: object) -> bool:
+        if not self._voice_pending_confirmations:
+            return False
+
+        command_event = payload if isinstance(payload, VoiceCommandEvent) else None
+        source_id = command_event.source_id if command_event is not None else "local-usb-mic"
+        session_key = self._voice_confirmation_session_key_for_source(source_id)
+        pending_event = self._voice_pending_confirmations.get(session_key)
+        if pending_event is None:
+            return False
+
+        text = command_event.text if command_event is not None else str(payload or "")
+        if is_confirmation_phrase(text):
+            self._voice_pending_confirmations.pop(session_key, None)
+            self._log_voice_ui_event(
+                "voice_command_confirmed",
+                source_id=pending_event.source_id,
+                session_id=pending_event.session_id,
+                confirmation_text=text,
+            )
+            self.chat_log.append(f"<i>Confirmed voice command: {html.escape(pending_event.text)}</i>")
+            self._set_voice_surface_last_command_text("assistant", f"Last voice command: {pending_event.text}")
+            self._set_voice_surface_partial_text("assistant", "Live transcript: (sent)")
+            self.chat_input.setText(pending_event.text)
+            self._pending_assistant_session_key = self._voice_assistant_session_key(pending_event.source_id)
+            self._pending_assistant_request_context = {
+                "request_source": "voice",
+                "assistant_session_key": self._voice_assistant_session_key(pending_event.source_id),
+                "source_id": pending_event.source_id,
+                "command_session_id": pending_event.session_id,
+                "provider": pending_event.provider,
+                "confidence": pending_event.confidence_0_1,
+            }
+            self.chat_log.append(f"<b>You (voice):</b> {html.escape(pending_event.text)}")
+            self.send_prompt()
+            return True
+
+        if is_rejection_phrase(text):
+            self._voice_pending_confirmations.pop(session_key, None)
+            self._log_voice_ui_event(
+                "voice_command_canceled",
+                source_id=pending_event.source_id,
+                session_id=pending_event.session_id,
+                rejection_text=text,
+            )
+            self.chat_log.append("<i>Voice command canceled.</i>")
+            self.status_bar.showMessage("Pending voice command canceled.", 3000)
+            self._set_voice_surface_partial_text("assistant", "Live transcript: (canceled)")
+            return True
+
+        self.chat_log.append("<i>Please say 'confirm' or 'cancel' for the pending voice command.</i>")
+        self.status_bar.showMessage("Awaiting confirmation phrase.", 2500)
+        return True
+
+    def _voice_confirmation_session_key(self, event: VoiceCommandEvent) -> str:
+        source_id = event.source_id.strip() or "local-usb-mic"
+        return self._voice_confirmation_session_key_for_source(source_id)
+
+    def _voice_confirmation_session_key_for_source(self, source_id: str) -> str:
+        return f"assistant::{source_id.strip() or 'local-usb-mic'}"
+
+    def _voice_assistant_session_key(self, source_id: str) -> str:
+        return f"voice::{source_id.strip() or 'local-usb-mic'}"
+
+    def _is_duplicate_voice_command_event(self, event: VoiceCommandEvent) -> bool:
+        event_id = event.session_id.strip()
+        if not event_id:
+            return False
+        return event_id in self._processed_voice_command_ids
+
+    def _remember_voice_command_event(self, event: VoiceCommandEvent) -> None:
+        event_id = event.session_id.strip()
+        if not event_id or event_id in self._processed_voice_command_ids:
+            return
+        if len(self._processed_voice_command_order) == self._processed_voice_command_order.maxlen:
+            evicted = self._processed_voice_command_order.popleft()
+            self._processed_voice_command_ids.discard(evicted)
+        self._processed_voice_command_order.append(event_id)
+        self._processed_voice_command_ids.add(event_id)
+
+    def _log_voice_ui_event(self, event: str, **fields: object) -> None:
+        telemetry = getattr(self.voice_coordinator, "telemetry", None)
+        if telemetry is None:
+            return
+        try:
+            telemetry.log(event, **fields)
+        except Exception:
+            return
 
     def _load_wake_phrase_setting(self) -> str:
         raw_value = self.app_controller.get_setting("voice_wake_phrase", "hey steven") or "hey steven"
@@ -4423,7 +4625,8 @@ class MainWindow(QMainWindow):
         self.voice_coordinator.on_status = self.voice_status_signal.emit
         self.voice_coordinator.on_error = self.voice_error_signal.emit
         self.voice_coordinator.on_wake = self.voice_wake_signal.emit
-        self.voice_coordinator.on_command = self.voice_command_signal.emit
+        self.voice_coordinator.on_command = None
+        self.voice_coordinator.on_command_event = self.voice_command_signal.emit
         self.voice_coordinator.on_partial = self.voice_partial_signal.emit
         self.voice_coordinator.on_diagnostic = self.voice_diagnostic_signal.emit
 
@@ -4512,6 +4715,12 @@ class MainWindow(QMainWindow):
             self._set_voice_surface_partial_text(mode, "Live transcript: (off)")
 
     def _handle_assistant_result(self, result: AssistantResult) -> None:
+        self._log_assistant_request_event(
+            "assistant_voice_result",
+            applied_actions=len(result.applied_actions),
+            action_count=len(result.actions),
+            display_tables=len(result.display_tables),
+        )
         formatted_reply = self._format_assistant_reply_html(result.reply)
         response_lines = [f"<b>Assistant:</b> {formatted_reply}"]
         if result.applied_actions:
@@ -4521,6 +4730,7 @@ class MainWindow(QMainWindow):
         self.chat_log.append("<br>".join(response_lines))
         self.status_bar.showMessage("Assistant response complete.", 4000)
         self.send_button.setEnabled(True)
+        self._active_assistant_request_context = None
         self.refresh_all()
 
     def _format_assistant_reply_html(self, reply_text: str) -> str:
@@ -4748,9 +4958,21 @@ class MainWindow(QMainWindow):
         )
 
     def _handle_assistant_failure(self, error_text: str) -> None:
+        self._log_assistant_request_event("assistant_voice_failure", error=error_text)
         self.chat_log.append(f"<b>Assistant error:</b> {error_text}")
         self.status_bar.showMessage("Assistant failed to respond.", 5000)
         self.send_button.setEnabled(True)
+        self._active_assistant_request_context = None
+
+    def _log_assistant_request_event(self, event: str, **fields: object) -> None:
+        context = self._active_assistant_request_context
+        if not isinstance(context, dict):
+            return
+        if context.get("request_source") != "voice":
+            return
+        payload = dict(context)
+        payload.update(fields)
+        self._log_voice_ui_event(event, **payload)
 
     def closeEvent(self, event) -> None:  # type: ignore[override]
         try:

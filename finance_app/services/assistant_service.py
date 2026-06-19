@@ -24,7 +24,8 @@ class AssistantService:
     def __init__(self, repository: FinanceRepository, client: OllamaClient | None = None) -> None:
         self.repository = repository
         self.client = client or OllamaClient()
-        self.conversation_history: list[OllamaMessage] = []  # Maintain conversation memory
+        self._default_session_key = "typed-assistant"
+        self._conversation_histories: dict[str, list[OllamaMessage]] = {}
 
     def build_context(self) -> AssistantContext:
         snapshot = self.repository.snapshot()
@@ -45,7 +46,9 @@ class AssistantService:
         )
         return AssistantContext(snapshot_text=snapshot_text, categories_text=categories_text, recurring_text=recurring_text)
 
-    def handle_prompt(self, prompt_text: str) -> AssistantResult:
+    def handle_prompt(self, prompt_text: str, session_key: str | None = None) -> AssistantResult:
+        resolved_session_key = self._resolve_session_key(session_key)
+        history = self._conversation_histories.setdefault(resolved_session_key, [])
         context = self.build_context()
         
         # Build context message with current app state
@@ -62,10 +65,10 @@ class AssistantService:
         
         # Add all previous conversation turns (limited to last 10 to avoid token bloat)
         max_history = 10
-        if len(self.conversation_history) > max_history:
-            messages.extend(self.conversation_history[-max_history:])
+        if len(history) > max_history:
+            messages.extend(history[-max_history:])
         else:
-            messages.extend(self.conversation_history)
+            messages.extend(history)
         
         # Add current user message with context
         user_message = OllamaMessage(role="user", content=context_message)
@@ -114,8 +117,8 @@ class AssistantService:
         result.display_tables = self._build_display_tables(result.actions)
         
         # Store in conversation history for future context
-        self.conversation_history.append(user_message)
-        self.conversation_history.append(OllamaMessage(role="assistant", content=raw_response))
+        history.append(user_message)
+        history.append(OllamaMessage(role="assistant", content=raw_response))
         
         return result
 
@@ -854,18 +857,29 @@ Respond ONLY with a JSON object in this exact format (no markdown, no extra text
 
         return saved_ids
 
-    def clear_conversation_history(self) -> None:
-        """Clear the conversation history. Use when starting a new session."""
-        self.conversation_history = []
+    def clear_conversation_history(self, session_key: str | None = None) -> None:
+        """Clear conversation history for one session, or all sessions when omitted."""
+        if session_key is None:
+            self._conversation_histories = {}
+            return
 
-    def get_conversation_summary(self) -> str:
-        """Get a summary of the conversation history for display."""
-        if not self.conversation_history:
+        resolved_session_key = self._resolve_session_key(session_key)
+        self._conversation_histories.pop(resolved_session_key, None)
+
+    def get_conversation_summary(self, session_key: str | None = None) -> str:
+        """Get a summary of conversation history for a session."""
+        resolved_session_key = self._resolve_session_key(session_key)
+        history = self._conversation_histories.get(resolved_session_key, [])
+        if not history:
             return "No conversation history yet. Start chatting with the financial advisor!"
         
         # Count user messages (every other message, starting at index 0)
-        user_turns = len([m for m in self.conversation_history if m.role == "user"])
+        user_turns = len([m for m in history if m.role == "user"])
         return f"You've had {user_turns} exchanges with your financial advisor in this session."
+
+    def _resolve_session_key(self, session_key: str | None) -> str:
+        cleaned = (session_key or "").strip()
+        return cleaned or self._default_session_key
 
     def _parse_date(self, value: Any) -> date | None:
         if not value:

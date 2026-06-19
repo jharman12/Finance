@@ -127,6 +127,102 @@ The Assistant tab now includes a **Voice Diagnostics** panel that shows live sta
 
 The recognized command is sent through the same assistant workflow used by typed prompts, so actions and updates work the same way.
 
+## Remote voice sender
+
+You can now run a lightweight sender script on a separate device that:
+
+- listens locally for the wake phrase,
+- stays off the network until wake is detected,
+- opens a TLS-verified connection only for the active utterance,
+- streams a short pre-roll buffer so the main PC still hears the wake phrase.
+
+Script:
+
+`remote_voice_sender.py`
+
+Full setup guide:
+
+`Remote_Voice_Setup_Guide.md`
+
+### Remote sender dependencies
+
+For the remote device, the minimum useful packages are:
+
+- `sounddevice`
+- `vosk`
+
+Optional:
+
+- `openwakeword` if you have a dedicated custom `Hey Steven` wake model
+
+### Main PC remote receiver settings
+
+On the main PC, enable remote audio and configure TLS:
+
+```bash
+set FINANCE_APP_REMOTE_AUDIO_ENABLED=1
+set FINANCE_APP_REMOTE_AUDIO_TOKEN=replace-with-a-long-random-secret
+set FINANCE_APP_REMOTE_AUDIO_BIND_HOST=0.0.0.0
+set FINANCE_APP_REMOTE_AUDIO_PORT=45881
+set FINANCE_APP_REMOTE_AUDIO_TLS_CERT=C:\path\to\server-cert.pem
+set FINANCE_APP_REMOTE_AUDIO_TLS_KEY=C:\path\to\server-key.pem
+```
+
+Important:
+
+- Use a token with at least 16 random characters.
+- Use a certificate whose hostname or IP matches what the remote sender will connect to.
+- Export or copy the issuing CA certificate, or the self-signed server certificate, to the remote device.
+
+### Remote device environment setup
+
+```bash
+set FINANCE_APP_REMOTE_AUDIO_HOST=192.168.1.20
+set FINANCE_APP_REMOTE_AUDIO_PORT=45881
+set FINANCE_APP_REMOTE_AUDIO_TOKEN=replace-with-a-long-random-secret
+set FINANCE_APP_REMOTE_AUDIO_CA_CERT=C:\path\to\server-or-ca-cert.pem
+set FINANCE_APP_REMOTE_AUDIO_TLS_SERVER_NAME=finance-voice.local
+set FINANCE_APP_REMOTE_SOURCE_ID=kitchen-node
+set FINANCE_APP_REMOTE_WAKE_MODE=phrase_vosk
+set FINANCE_APP_REMOTE_VOSK_MODEL_PATH=C:\path\to\vosk-model-en-us-0.22-lgraph
+```
+
+Then run:
+
+```bash
+python remote_voice_sender.py
+```
+
+### Sender behavior
+
+- The remote script keeps the microphone local and does not continuously stream raw audio to the main PC.
+- It only opens the network connection after the local wake detector hears the wake phrase.
+- It sends a 2-second pre-roll buffer so the server still receives the wake phrase and can follow the existing voice pipeline.
+- It closes the connection after silence or when the local utterance timeout is reached.
+
+### Optional sender tuning
+
+```bash
+python remote_voice_sender.py ^
+	--host 192.168.1.20 ^
+	--port 45881 ^
+	--source-id kitchen-node ^
+	--ca-cert C:\path\to\server-or-ca-cert.pem ^
+	--tls-server-name finance-voice.local ^
+	--vosk-model-path C:\path\to\vosk-model-en-us-0.22-lgraph ^
+	--wake-phrase "hey steven" ^
+	--preroll-ms 2000 ^
+	--post-wake-grace-ms 1200 ^
+	--max-stream-seconds 12
+```
+
+### Security notes
+
+- The sender refuses to run without a CA certificate path, so TLS server verification is enforced by default.
+- Do not expose the remote audio port to the internet.
+- Prefer a dedicated local hostname and certificate instead of raw IP-only setups when possible.
+- Rotate the shared token if the remote device is lost or repurposed.
+
 ### Troubleshooting
 
 - If you see "Voice dependencies missing", install `vosk` and `sounddevice`.

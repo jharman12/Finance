@@ -10,14 +10,15 @@ class AssistantWorker(QThread):
     result_ready = pyqtSignal(object)
     failed = pyqtSignal(str)
 
-    def __init__(self, assistant_service: AssistantService, prompt_text: str) -> None:
+    def __init__(self, assistant_service: AssistantService, prompt_text: str, session_key: str | None = None) -> None:
         super().__init__()
         self.assistant_service = assistant_service
         self.prompt_text = prompt_text
+        self.session_key = session_key
 
     def run(self) -> None:
         try:
-            result = self.assistant_service.handle_prompt(self.prompt_text)
+            result = self.assistant_service.handle_prompt(self.prompt_text, session_key=self.session_key)
         except Exception as exc:  # pragma: no cover - surface to the UI
             self.failed.emit(str(exc))
             return

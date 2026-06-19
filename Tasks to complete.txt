@@ -1,5 +1,7 @@
 Tasks to complete
 
-1.) In the assets tab, all of the combo box inputs should only be inputted in once upon creation. There should be an option to edit this over time. Make sure adding expenses applies changes to these appropiately.
-2.) Make the net worth section at the asset tabs update as expenses changes to the assets are made.
-3.) 
+1). Currently, my application allows for users to do speech to text in order to pass questions to the locally running LLM. This process works by using a local microphone connected to the PC running the
+     application. I would like to extend this to allow a seperate computer, connected to the same local network, record the audio and pass the audio over the network to the main PC running the application. 
+     That PC would then translate the audio to text and then pass that text to the AI. The goal is to set up an amazon Alexa style device that is connected and allows the use of the application from other
+      rooms. Can you create an implementation plan for this. Please review the process I highlighted, verify that is the best way, and if it is not, then suggest a better process. Work with the Cyber Handler, 
+      Speech to Text Handler, and AI Handler agents for this text. This needs to be implemented in the securist way such that it does not open the user up to cyber attacks.

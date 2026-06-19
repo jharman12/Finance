@@ -97,6 +97,25 @@ class VoicePipelineIntegrationTests(unittest.TestCase):
         commands, _ = self._run_fixture("noisy_trailing_pause.json")
         self.assertEqual(commands, ["add groceries expense"])
 
+    def test_dispatch_emits_structured_command_event(self) -> None:
+        coordinator = self._build_coordinator()
+        events: list[object] = []
+        coordinator.on_command_event = events.append
+
+        coordinator._handle_audio_chunk(b"WAKE")  # noqa: SLF001
+        coordinator._handle_audio_chunk(b"SPEECH")  # noqa: SLF001
+        coordinator._handle_audio_chunk(b"SILENCE")  # noqa: SLF001
+        if coordinator._awaiting_continuation:  # noqa: SLF001
+            coordinator._continuation_deadline = 0.0  # noqa: SLF001
+            coordinator._handle_audio_chunk(b"SILENCE")  # noqa: SLF001
+
+        self.assertEqual(len(events), 1)
+        event = events[0]
+        self.assertEqual(getattr(event, "text", None), "add groceries expense")
+        self.assertEqual(getattr(event, "provider", None), "fake")
+        self.assertEqual(getattr(event, "source_id", None), "local-usb-mic")
+        self.assertTrue(str(getattr(event, "session_id", "")).startswith("voice-"))
+
 
 if __name__ == "__main__":
     unittest.main()

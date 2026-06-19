@@ -12,7 +12,9 @@ from typing import Any, Callable
 from finance_app.services.voice.asr_faster_whisper import FasterWhisperAsrProvider
 from finance_app.services.voice.asr_router import AsrRouter
 from finance_app.services.voice.asr_vosk import VoskAsrProvider
+from finance_app.services.voice.command_event import VoiceCommandEvent
 from finance_app.services.voice.postprocess import normalize_command_text
+from finance_app.services.voice.remote_stream_source import RemoteStreamSource
 from finance_app.services.voice.session_state import VoiceSessionState
 from finance_app.services.voice.stream_source import MicStreamSource
 from finance_app.services.voice.telemetry import VoiceTelemetryLogger
@@ -119,9 +121,23 @@ class VoiceCoordinator:
         self.router = WakeWordCommandRouter(wake_phrase=wake_phrase)
         self.sample_rate = 16000
         self.source_id = "local-usb-mic"
+        self._active_source_id = self.source_id
         self.model_path = os.getenv("FINANCE_APP_VOSK_MODEL_PATH", "models/vosk-model-en-us-0.22-lgraph")
 
         self.stream = MicStreamSource(sample_rate=self.sample_rate, blocksize=1600)
+        self._local_mic_enabled = os.getenv("FINANCE_APP_LOCAL_MIC_ENABLED", "1").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        self._remote_audio_enabled = os.getenv("FINANCE_APP_REMOTE_AUDIO_ENABLED", "0").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        self.remote_stream: RemoteStreamSource | None = self._build_remote_stream_source()
         self.endpoint = VoiceActivityEndpoint(
             min_speech_ms=int(os.getenv("FINANCE_APP_VOICE_MIN_UTTERANCE_MS", "300")),
             end_silence_ms=int(os.getenv("FINANCE_APP_VOICE_ENDPOINT_SILENCE_MS", "700")),
@@ -171,6 +187,7 @@ class VoiceCoordinator:
         self.on_error: Callable[[str], None] | None = None
         self.on_wake: Callable[[str], None] | None = None
         self.on_command: Callable[[str], None] | None = None
+        self.on_command_event: Callable[[VoiceCommandEvent], None] | None = None
         self.on_partial: Callable[[str], None] | None = None
         self.on_diagnostic: Callable[[dict[str, Any]], None] | None = None
 
@@ -193,17 +210,40 @@ class VoiceCoordinator:
             self._last_partial_emit_at = 0.0
             self._awaiting_continuation = False
             self._continuation_deadline = 0.0
+            self._active_source_id = self.source_id
 
-        self.stream.start(
-            on_audio_chunk=self._handle_audio_chunk,
-            on_status=self._emit_status,
-            on_error=self._handle_stream_error,
-        )
+        if self._local_mic_enabled:
+            self.stream.start(
+                on_audio_chunk=self._handle_audio_chunk,
+                on_status=self._emit_status,
+                on_error=self._handle_stream_error,
+            )
+
+        if self.remote_stream is not None:
+            try:
+                self.remote_stream.start(
+                    on_audio_chunk=self._handle_remote_audio_chunk,
+                    on_status=self._emit_status,
+                    on_error=self._handle_stream_error,
+                    on_diagnostic=self._emit_diagnostic,
+                )
+            except Exception as exc:
+                self._handle_stream_error(f"Remote audio server failed to start: {exc}")
+                return
+
         self.telemetry.log("voice_started", wake_mode=self.wake_mode)
+        if self.remote_stream is not None:
+            self.telemetry.log(
+                "remote_audio_started",
+                bind_port=self.remote_stream.bound_port,
+                local_mic_enabled=self._local_mic_enabled,
+            )
         self._emit_diagnostic(stage="started", wake_mode=self.wake_mode)
 
     def stop(self) -> None:
         self.stream.stop()
+        if self.remote_stream is not None:
+            self.remote_stream.stop()
         if self._wake_detector is not None:
             try:
                 self._wake_detector.stop()
@@ -220,6 +260,7 @@ class VoiceCoordinator:
             self._last_partial_emit_at = 0.0
             self._awaiting_continuation = False
             self._continuation_deadline = 0.0
+            self._active_source_id = self.source_id
         self.telemetry.log("voice_stopped")
         self._emit_diagnostic(stage="stopped")
 
@@ -259,6 +300,12 @@ class VoiceCoordinator:
             return False
 
     def _handle_audio_chunk(self, chunk: bytes) -> None:
+        self._handle_audio_chunk_from_source(self.source_id, chunk)
+
+    def _handle_remote_audio_chunk(self, source_id: str, chunk: bytes) -> None:
+        self._handle_audio_chunk_from_source(source_id, chunk)
+
+    def _handle_audio_chunk_from_source(self, source_id: str, chunk: bytes) -> None:
         if not chunk:
             return
 
@@ -266,6 +313,7 @@ class VoiceCoordinator:
             self._preroll_chunks.append(chunk)
             state = self.state
             in_cooldown = self._in_cooldown_locked()
+            self._active_source_id = source_id or self.source_id
 
         if state in (VoiceSessionState.DECODING, VoiceSessionState.DISPATCHING, VoiceSessionState.ERROR):
             return
@@ -274,13 +322,13 @@ class VoiceCoordinator:
             return
 
         if state == VoiceSessionState.IDLE:
-            self._process_wake_chunk(chunk)
+            self._process_wake_chunk(chunk, source_id=self._active_source_id)
             return
 
         if state == VoiceSessionState.CAPTURING:
             self._process_capture_chunk(chunk)
 
-    def _process_wake_chunk(self, chunk: bytes) -> None:
+    def _process_wake_chunk(self, chunk: bytes, source_id: str) -> None:
         detector = self._wake_detector
         if detector is None:
             return
@@ -307,13 +355,19 @@ class VoiceCoordinator:
             self._last_partial_emit_at = 0.0
             self._awaiting_continuation = False
             self._continuation_deadline = 0.0
+            self._active_source_id = source_id or self.source_id
 
-        self._emit_wake(self.source_id)
+        self._emit_wake(self._active_source_id)
         self._emit_status("Wake detected. Listening for command...")
-        self._emit_diagnostic(stage="wake", source_id=self.source_id, wake_mode=self.wake_mode, utterance_id=utterance_id)
+        self._emit_diagnostic(
+            stage="wake",
+            source_id=self._active_source_id,
+            wake_mode=self.wake_mode,
+            utterance_id=utterance_id,
+        )
         self.telemetry.log(
             "wake_detected",
-            source_id=self.source_id,
+            source_id=self._active_source_id,
             wake_mode=self.wake_mode,
             utterance_id=utterance_id,
         )
@@ -424,11 +478,21 @@ class VoiceCoordinator:
         command_text = normalize_command_text(result.text)
         command_text = self.router._remove_wake_phrase(command_text).strip()
         if command_text:
+            command_event = VoiceCommandEvent(
+                text=command_text,
+                source_id=self._active_source_id,
+                session_id=f"voice-{utterance_id}",
+                provider=result.provider,
+                confidence_0_1=result.confidence_0_1,
+                latency_ms=result.latency_ms,
+                used_fallback=result.used_fallback,
+                fallback_reason=result.fallback_reason,
+            )
             provider_status = f"Command captured by {result.provider}"
             if result.used_fallback and result.fallback_reason:
                 provider_status += f" (fallback: {result.fallback_reason})"
             self._emit_status(provider_status)
-            self._emit_command(command_text)
+            self._emit_command(command_event)
             self._emit_diagnostic(
                 stage="dispatch",
                 utterance_id=utterance_id,
@@ -441,6 +505,7 @@ class VoiceCoordinator:
             self.telemetry.log(
                 "command_dispatch",
                 utterance_id=utterance_id,
+                source_id=self._active_source_id,
                 provider=result.provider,
                 confidence=result.confidence_0_1,
                 latency_ms=result.latency_ms,
@@ -460,6 +525,7 @@ class VoiceCoordinator:
             self.telemetry.log(
                 "command_empty",
                 utterance_id=utterance_id,
+                source_id=self._active_source_id,
                 provider=result.provider,
                 confidence=result.confidence_0_1,
                 latency_ms=result.latency_ms,
@@ -547,6 +613,38 @@ class VoiceCoordinator:
         if self.on_diagnostic:
             self.on_diagnostic(payload)
 
+    def _build_remote_stream_source(self) -> RemoteStreamSource | None:
+        if not self._remote_audio_enabled:
+            return None
+
+        auth_token = os.getenv("FINANCE_APP_REMOTE_AUDIO_TOKEN", "").strip()
+        if len(auth_token) < 16:
+            telemetry = getattr(self, "telemetry", None)
+            if telemetry is not None:
+                telemetry.log(
+                    "remote_audio_disabled",
+                    reason="missing_or_short_token",
+                    min_token_chars=16,
+                )
+            return None
+
+        host = os.getenv("FINANCE_APP_REMOTE_AUDIO_BIND_HOST", "127.0.0.1").strip() or "127.0.0.1"
+        port = int(os.getenv("FINANCE_APP_REMOTE_AUDIO_PORT", "45881"))
+        max_chunk_bytes = int(os.getenv("FINANCE_APP_REMOTE_AUDIO_MAX_CHUNK_BYTES", "32768"))
+        max_mps = int(os.getenv("FINANCE_APP_REMOTE_AUDIO_MAX_MESSAGES_PER_SECOND", "120"))
+        tls_cert_path = os.getenv("FINANCE_APP_REMOTE_AUDIO_TLS_CERT", "").strip() or None
+        tls_key_path = os.getenv("FINANCE_APP_REMOTE_AUDIO_TLS_KEY", "").strip() or None
+
+        return RemoteStreamSource(
+            host=host,
+            port=port,
+            auth_token=auth_token,
+            max_chunk_bytes=max_chunk_bytes,
+            max_messages_per_second=max_mps,
+            tls_cert_path=tls_cert_path,
+            tls_key_path=tls_key_path,
+        )
+
     def _in_cooldown_locked(self) -> bool:
         if self._cooldown_until <= 0.0:
             return False
@@ -578,6 +676,8 @@ class VoiceCoordinator:
         if self.on_wake:
             self.on_wake(source_id)
 
-    def _emit_command(self, command_text: str) -> None:
+    def _emit_command(self, command_event: VoiceCommandEvent) -> None:
+        if self.on_command_event:
+            self.on_command_event(command_event)
         if self.on_command:
-            self.on_command(command_text)
+            self.on_command(command_event.text)
