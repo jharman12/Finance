@@ -22,6 +22,7 @@ from finance_app.services.voice.discovery import (
     SERVICE_TYPE_SENDER,
 )
 from finance_app.services.voice.pairing import PairingCodeGenerator
+from finance_app.services.voice.remote_config import RemoteVoiceConfigManager
 from finance_app.services.voice.vad_endpointing import VoiceActivityEndpoint
 from finance_app.services.voice.wake_detector import OpenWakeWordDetector, VoskPhraseWakeDetector
 
@@ -212,10 +213,8 @@ class RemoteWakeStreamSender:
             role="remote-sender",
             protocol_version="1",
         )
-        if self._discovery_publisher.start():
-            _log(f"Advertising as remote device '{self._discovery_publisher.device_name}' on the network.")
-        else:
-            _log("Failed to advertise on network; pairing from main app may not discover this device.")
+        # Override to use sender service type
+        self._discovery_publisher.service_type = SERVICE_TYPE_SENDER
 
 
         def callback(indata, frames, time_info, status) -> None:  # type: ignore[no-untyped-def]
@@ -503,17 +502,46 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def build_config(args: argparse.Namespace) -> SenderConfig:
+    # Auto-generate credentials if not provided
+    config_manager = RemoteVoiceConfigManager()
+    creds = config_manager.get_credentials()
+
     token = str(args.token).strip()
     if len(token) < 16:
-        raise ValueError("Provide FINANCE_APP_REMOTE_AUDIO_TOKEN or --token with at least 16 characters.")
+        token = creds.auth_token
+        _log(f"Using auto-generated token from {Path.home() / '.finance-voice'}")
 
     ca_cert_path = str(args.ca_cert).strip()
     if not ca_cert_path:
-        raise ValueError("Provide FINANCE_APP_REMOTE_AUDIO_CA_CERT or --ca-cert to enforce TLS server verification.")
+        # Try to use auto-generated cert path
+        cert_path = Path.home() / ".finance-voice" / "tls-cert.pem"
+        if cert_path.exists():
+            ca_cert_path = str(cert_path)
+            _log(f"Using auto-generated CA cert from {cert_path}")
+        else:
+            raise ValueError(
+                f"CA certificate not found. Expected at {cert_path}. "
+                "Please run main.py first to generate credentials, or provide --ca-cert manually."
+            )
 
     wake_mode = str(args.wake_mode).strip().lower() or "phrase_vosk"
     if wake_mode not in {"phrase_vosk", "openwakeword"}:
         raise ValueError("Wake mode must be phrase_vosk or openwakeword.")
+
+    # Provide smart defaults for model paths
+    vosk_model_path = str(args.vosk_model_path).strip()
+    if wake_mode == "phrase_vosk" and not vosk_model_path:
+        # Try to find Vosk model in workspace
+        workspace_vosk = Path("models/vosk-model-en-us-0.22-lgraph")
+        if workspace_vosk.exists():
+            vosk_model_path = str(workspace_vosk.resolve())
+            _log(f"Using Vosk model from {vosk_model_path}")
+        else:
+            raise ValueError(
+                f"Vosk model not found at {workspace_vosk}. "
+                "Provide --vosk-model-path or set FINANCE_APP_REMOTE_VOSK_MODEL_PATH, "
+                "or use --wake-mode openwakeword for a lighter-weight option."
+            )
 
     return SenderConfig(
         host=str(args.host).strip(),
@@ -524,7 +552,7 @@ def build_config(args: argparse.Namespace) -> SenderConfig:
         tls_server_name=(str(args.tls_server_name).strip() or None),
         wake_phrase=str(args.wake_phrase).strip() or "hey steven",
         wake_mode=wake_mode,
-        vosk_model_path=(str(args.vosk_model_path).strip() or None),
+        vosk_model_path=(vosk_model_path or None),
         openwakeword_model_path=(str(args.openwakeword_model_path).strip() or None),
         wake_threshold=float(args.wake_threshold),
         sample_rate=int(args.sample_rate),
