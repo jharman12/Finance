@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
+from finance_app.services.voice.discovery import RemoteVoiceDiscoveryBrowser, RemoteVoiceDiscoveryDevice
 from finance_app.services.voice.vad_endpointing import VoiceActivityEndpoint
 from finance_app.services.voice.wake_detector import OpenWakeWordDetector, VoskPhraseWakeDetector
 
@@ -169,6 +170,8 @@ class RemoteWakeStreamSender:
         self._stream_started_at = 0.0
         self._grace_deadline = 0.0
         self._grace_reset_pending = False
+        self._discovery_browser: RemoteVoiceDiscoveryBrowser | None = None
+        self._discovery_ready = threading.Event()
 
     def run(self) -> int:
         try:
@@ -185,6 +188,12 @@ class RemoteWakeStreamSender:
             if hint:
                 _log(hint)
             return 2
+
+        self._discovery_browser = RemoteVoiceDiscoveryBrowser()
+        if self._discovery_browser.start(on_device=self._handle_discovered_receiver, on_diagnostic=self._handle_discovery_diagnostic):
+            _log("Browsing the local network for the Finance Voice Receiver.")
+        elif not self.config.host:
+            _log("mDNS discovery is unavailable. Set --host or FINANCE_APP_REMOTE_AUDIO_HOST manually.")
 
         def callback(indata, frames, time_info, status) -> None:  # type: ignore[no-untyped-def]
             del frames, time_info
@@ -221,12 +230,32 @@ class RemoteWakeStreamSender:
             return 1
         finally:
             self._close_stream(reason="shutdown")
+            if self._discovery_browser is not None:
+                try:
+                    self._discovery_browser.stop()
+                except Exception:
+                    pass
             try:
                 self.wake_detector.stop()
             except Exception:
                 pass
 
         return 0
+
+    def _handle_discovery_diagnostic(self, payload: dict[str, object]) -> None:
+        _debug(f"mDNS diagnostic: {payload}")
+
+    def _handle_discovered_receiver(self, device: RemoteVoiceDiscoveryDevice) -> None:
+        if self.config.host and self.config.host not in {"127.0.0.1", "localhost"}:
+            return
+        if device.host:
+            self.config.host = device.host
+        if device.port:
+            self.config.port = int(device.port)
+        if not self.config.tls_server_name and device.host:
+            self.config.tls_server_name = device.host
+        self._discovery_ready.set()
+        _log(f"Discovered Finance Voice Receiver: {device.device_name} at {device.host}:{device.port}")
 
     def _handle_chunk(self, chunk: bytes) -> None:
         if not chunk:
@@ -266,6 +295,12 @@ class RemoteWakeStreamSender:
             self._close_stream(reason=decision.reason or "silence")
 
     def _open_stream(self, now: float) -> None:
+        if not self.config.host:
+            if not self._discovery_ready.wait(timeout=5.0):
+                _log("Remote audio connection failed: no Finance Voice Receiver was discovered yet.")
+                self._cooldown_until = time.monotonic() + self.config.cooldown_seconds
+                return
+
         connection = SecureRemoteAudioConnection(self.config)
         try:
             connection.connect()
@@ -373,7 +408,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Lightweight remote wake-word sender for the Finance Assistant voice server."
     )
-    parser.add_argument("--host", default=_env("FINANCE_APP_REMOTE_AUDIO_HOST", "127.0.0.1"))
+    parser.add_argument("--host", default=_env("FINANCE_APP_REMOTE_AUDIO_HOST", ""))
     parser.add_argument("--port", type=int, default=int(_env("FINANCE_APP_REMOTE_AUDIO_PORT", "45881")))
     parser.add_argument("--token", default=_env("FINANCE_APP_REMOTE_AUDIO_TOKEN", ""))
     parser.add_argument("--source-id", default=_env("FINANCE_APP_REMOTE_SOURCE_ID", socket.gethostname()))
@@ -450,7 +485,7 @@ def build_config(args: argparse.Namespace) -> SenderConfig:
         raise ValueError("Wake mode must be phrase_vosk or openwakeword.")
 
     return SenderConfig(
-        host=str(args.host).strip() or "127.0.0.1",
+        host=str(args.host).strip(),
         port=int(args.port),
         token=token,
         source_id=str(args.source_id).strip() or socket.gethostname(),

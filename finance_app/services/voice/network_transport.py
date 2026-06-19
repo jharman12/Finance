@@ -14,6 +14,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
+from finance_app.services.voice.discovery import RemoteVoiceDiscoveryPublisher
+
 
 @dataclass(slots=True)
 class RemoteAudioPacket:
@@ -59,6 +61,8 @@ class RemoteAudioServer:
         self._thread: threading.Thread | None = None
         self._stop_event = threading.Event()
         self._debug = os.getenv("FINANCE_APP_REMOTE_AUDIO_DEBUG", "0").strip().lower() in {"1", "true", "yes", "on"}
+        self._discovery_name = os.getenv("FINANCE_APP_REMOTE_DISCOVERY_NAME", "Finance Voice Receiver").strip() or "Finance Voice Receiver"
+        self._discovery_publisher: RemoteVoiceDiscoveryPublisher | None = None
 
         self.on_packet: Callable[[RemoteAudioPacket], None] | None = None
         self.on_status: Callable[[str], None] | None = None
@@ -222,7 +226,27 @@ class RemoteAudioServer:
 
         self._thread = threading.Thread(target=self._serve, name="RemoteAudioServer", daemon=True)
         self._thread.start()
+
+        self._discovery_publisher = RemoteVoiceDiscoveryPublisher(
+            source_id="finance-main-pc",
+            port=self.bound_port,
+            device_name=self._discovery_name,
+            role="voice-receiver",
+        )
+        discovery_started = False
+        try:
+            discovery_started = self._discovery_publisher.start()
+        except Exception as exc:
+            self._emit_diagnostic(event="mdns_publish_failed", error=str(exc))
+            self._debug_log(f"mDNS publish failed: {exc}")
+
         self._emit_status(f"Remote audio server listening on {self.host}:{self.bound_port}")
+        if discovery_started:
+            self._emit_diagnostic(
+                event="mdns_published",
+                service_name=self._discovery_name,
+                port=self.bound_port,
+            )
         self._debug_log(f"RemoteAudioServer started host={self.host} port={self.bound_port} debug={self._debug}")
 
     def stop(self) -> None:
@@ -237,6 +261,14 @@ class RemoteAudioServer:
                 server.server_close()
             except Exception:
                 pass
+        discovery_publisher = self._discovery_publisher
+        self._discovery_publisher = None
+        if discovery_publisher is not None:
+            try:
+                discovery_publisher.stop()
+            except Exception:
+                pass
+
         thread = self._thread
         if thread is not None and thread.is_alive():
             thread.join(timeout=2.0)

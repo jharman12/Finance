@@ -98,6 +98,7 @@ class MainWindow(QMainWindow):
         self._voice_ui: dict[str, dict[str, object]] = {}
         self._voice_pending_confirmations: dict[str, VoiceCommandEvent] = {}
         self._processed_voice_command_ids: set[str] = set()
+        self._discovered_voice_devices: dict[str, dict[str, object]] = {}
         self._processed_voice_command_order: deque[str] = deque(maxlen=128)
         self._voice_auto_execute_threshold = 0.80
         self._voice_confirm_threshold = 0.60
@@ -2818,7 +2819,18 @@ class MainWindow(QMainWindow):
         wake_row.addWidget(wake_apply_button)
         layout.addLayout(wake_row)
 
-        last_command_label = QLabel("Last voice command: (none)")
+        devices_panel = QFrame()
+        devices_panel.setObjectName("Panel")
+        devices_layout = QVBoxLayout(devices_panel)
+        devices_layout.setContentsMargins(12, 10, 12, 10)
+        devices_layout.setSpacing(6)
+        devices_layout.addWidget(QLabel("Available Remote Voice Receivers"))
+
+        devices_list = QListWidget()
+        devices_list.setMaximumHeight(120)
+        devices_layout.addWidget(devices_list)
+
+        layout.addWidget(devices_panel)
         last_command_label.setObjectName("PageSubtitle")
         last_command_label.setWordWrap(True)
         layout.addWidget(last_command_label)
@@ -2881,6 +2893,7 @@ class MainWindow(QMainWindow):
             "wake_input": wake_input,
             "last_command": last_command_label,
             "partial": partial_label,
+            "devices_list": devices_list,
             "diag_stage": diag_stage,
             "diag_provider": diag_provider,
             "diag_confidence": diag_confidence,
@@ -4400,6 +4413,19 @@ class MainWindow(QMainWindow):
         if not isinstance(payload, dict):
             return
 
+        event_type = str(payload.get("event", "")).strip().lower()
+
+        if event_type == "mdns_service_state":
+            service_name = str(payload.get("service_name", "")).strip()
+            state = str(payload.get("state", "")).strip()
+            if service_name:
+                self._discovered_voice_devices[service_name] = {
+                    "service_name": service_name,
+                    "state": state,
+                }
+                self._update_discovered_devices_list()
+            return
+
         mode = self._voice_active_surface or "assistant"
         widgets = self._voice_ui.get(mode)
         if widgets is None:
@@ -4434,6 +4460,23 @@ class MainWindow(QMainWindow):
         widgets["diag_endpoint"].setText(endpoint_reason)  # type: ignore[call-arg]
         widgets["diag_speech_ms"].setText(speech_ms)  # type: ignore[call-arg]
         widgets["diag_wake_mode"].setText(wake_mode)  # type: ignore[call-arg]
+
+    def _update_discovered_devices_list(self) -> None:
+        mode = self._voice_active_surface or "testing"
+        widgets = self._voice_ui.get(mode)
+        if widgets is None:
+            return
+
+        devices_list_widget = widgets.get("devices_list")
+        if not isinstance(devices_list_widget, QListWidget):
+            return
+
+        devices_list_widget.clear()
+        for device_info in self._discovered_voice_devices.values():
+            service_name = device_info.get("service_name", "unknown")
+            state = device_info.get("state", "unknown")
+            display_text = f"{service_name} ({state})"
+            devices_list_widget.addItem(display_text)
 
     def _handle_voice_command(self, payload: object) -> None:
         command_event: VoiceCommandEvent | None = payload if isinstance(payload, VoiceCommandEvent) else None
