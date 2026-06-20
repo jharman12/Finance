@@ -277,3 +277,4 @@
 {"ts": "2026-06-19T21:53:05.884045+00:00", "event": "voice_stopped"}
 {"ts": "2026-06-19T21:53:07.475999+00:00", "event": "voice_stopped"}
 {"ts": "2026-06-19T22:06:27.276478+00:00", "event": "voice_stopped"}
+{"ts": "2026-06-19T22:51:08.757904+00:00", "event": "voice_started", "wake_mode": "phrase_vosk"}

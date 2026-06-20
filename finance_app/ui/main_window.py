@@ -10,7 +10,7 @@ import re
 
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
-from PyQt5.QtCore import QDate, QEvent, Qt, pyqtSignal
+from PyQt5.QtCore import QDate, QEvent, Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QFont, QKeySequence, QPalette, QColor
 from PyQt5.QtWidgets import (
     QApplication,
@@ -2878,10 +2878,12 @@ class MainWindow(QMainWindow):
         # Wire pairing manager callback to notify dialog
         if pairing_manager is not None:
             def on_pairing_confirmed(source_id: str, pairing_code: str) -> None:
-                dialog.on_pairing_confirmed(source_id, pairing_code)
+                QTimer.singleShot(0, lambda: dialog.pairing_verified_signal.emit(source_id, pairing_code))
             pairing_manager.set_callbacks(on_confirmed=on_pairing_confirmed)
         
         dialog.exec_()
+        if pairing_manager is not None:
+            pairing_manager.set_callbacks(on_confirmed=None)
 
     def _on_device_pairing_confirmed(self, source_id: str, pairing_code: str) -> None:
         """Handle device pairing confirmed."""
@@ -2889,7 +2891,7 @@ class MainWindow(QMainWindow):
         QMessageBox.information(
             self,
             "Device Paired",
-            f"Successfully paired device: {source_id}\n\nPariring code: {pairing_code}"
+            f"Successfully paired device: {source_id}\n\nPairing code: {pairing_code}"
         )
 
     def _on_device_pairing_cancelled(self) -> None:

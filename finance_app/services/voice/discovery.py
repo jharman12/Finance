@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 SERVICE_TYPE_RECEIVER = "_finance-voice._tcp.local."
-SERVICE_TYPE_SENDER = "_finance-voice-sender._tcp.local."
+SERVICE_TYPE_SENDER = "_fvoice-sender._tcp.local."
 SERVICE_TYPE = SERVICE_TYPE_RECEIVER  # Default for backward compatibility
 
 _zeroconf_module = None
@@ -40,10 +40,10 @@ def normalize_label(value: str, fallback: str = "finance-voice") -> str:
     return candidate or fallback
 
 
-def build_service_name(device_name: str, source_id: str) -> str:
+def build_service_name(device_name: str, source_id: str, service_type: str = SERVICE_TYPE) -> str:
     device_label = normalize_label(device_name)
     source_label = normalize_label(source_id, fallback="node")
-    return f"{device_label}-{source_label}.{SERVICE_TYPE}"
+    return f"{device_label}-{source_label}.{service_type}"
 
 
 def build_service_properties(
@@ -105,6 +105,7 @@ class RemoteVoiceDiscoveryPublisher:
         self.host = host
         self.role = role
         self.protocol_version = protocol_version
+        self.service_type = SERVICE_TYPE  # Can be overridden before calling start()
         self._zeroconf: Any = None
         self._service_info: Any = None
 
@@ -116,7 +117,7 @@ class RemoteVoiceDiscoveryPublisher:
             return True
 
         advertised_host = self.host or resolve_local_ipv4()
-        service_name = build_service_name(self.device_name, self.source_id)
+        service_name = build_service_name(self.device_name, self.source_id, self.service_type)
         properties = build_service_properties(
             source_id=self.source_id,
             device_name=self.device_name,
@@ -130,7 +131,7 @@ class RemoteVoiceDiscoveryPublisher:
             addresses = []
 
         self._service_info = ServiceInfo(
-            SERVICE_TYPE,
+            self.service_type,
             service_name,
             addresses=addresses,
             port=self.port,

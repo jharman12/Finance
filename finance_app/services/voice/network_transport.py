@@ -106,7 +106,10 @@ class RemoteAudioServer:
                 outer._debug_log(f"Connection accepted from {self.client_address}, tls={tls_enabled}")
 
                 while not outer._stop_event.is_set():
-                    raw = self.rfile.readline()
+                    try:
+                        raw = self.rfile.readline()
+                    except (ConnectionAbortedError, ConnectionResetError, OSError):
+                        return
                     if not raw:
                         return
                     if len(raw) > 131072:
@@ -155,13 +158,39 @@ class RemoteAudioServer:
                         authenticated = True
                         outer._emit_diagnostic(event="client_authenticated", source_id=source_id, tls=tls_enabled)
                         outer._debug_log(f"Client authenticated source_id={source_id}, tls={tls_enabled}")
-                        
+
                         # Check pairing code if present
+                        pairing_verified = False
                         pairing_code = str(msg.get("pairing_code", "")).strip()
                         if pairing_code and outer.pairing_manager is not None:
                             if hasattr(outer.pairing_manager, 'verify_pairing_code'):
                                 pairing_verified = outer.pairing_manager.verify_pairing_code(source_id, pairing_code)
                                 outer._debug_log(f"Pairing code verification for {source_id}: {pairing_verified}")
+
+                        pairing_required = False
+                        if outer.pairing_manager is not None and hasattr(outer.pairing_manager, "is_pairing"):
+                            try:
+                                pairing_required = bool(outer.pairing_manager.is_pairing())
+                            except Exception:
+                                pairing_required = False
+
+                        try:
+                            self.wfile.write(
+                                (
+                                    json.dumps(
+                                        {
+                                            "type": "hello_ack",
+                                            "paired": pairing_verified,
+                                            "pairing_required": pairing_required,
+                                        },
+                                        ensure_ascii=True,
+                                    )
+                                    + "\n"
+                                ).encode("utf-8")
+                            )
+                            self.wfile.flush()
+                        except Exception:
+                            return
                         continue
 
                     if msg_type != "audio":

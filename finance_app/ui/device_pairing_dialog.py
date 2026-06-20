@@ -25,6 +25,8 @@ class DevicePairingDialog(QDialog):
 
     pairing_confirmed = pyqtSignal(str, str)  # Signals (source_id, pairing_code)
     pairing_cancelled = pyqtSignal()
+    device_discovered_signal = pyqtSignal(object)
+    pairing_verified_signal = pyqtSignal(str, str)
 
     def __init__(self, auth_token: str, pairing_manager: RemoteVoicePairingManager | None = None, parent: Any = None) -> None:
         super().__init__(parent)
@@ -36,6 +38,8 @@ class DevicePairingDialog(QDialog):
         self._pairing_timeout_timer = QTimer()
         self._pairing_timeout_timer.setSingleShot(True)
         self._pairing_timeout_timer.timeout.connect(self._on_pairing_timeout)
+        self.device_discovered_signal.connect(self._handle_discovered_device)
+        self.pairing_verified_signal.connect(self.on_pairing_confirmed)
 
         self.setWindowTitle("Pair Remote Voice Device")
         self.setMinimumWidth(500)
@@ -72,12 +76,16 @@ class DevicePairingDialog(QDialog):
         """Start discovering remote senders."""
         self._discovery_browser = RemoteVoiceDiscoveryBrowser(service_type=SERVICE_TYPE_SENDER)
         self._discovery_browser.start(
-            on_device=self._handle_discovered_device,
+            on_device=lambda device: self.device_discovered_signal.emit(device),
             on_diagnostic=self._handle_diagnostic,
         )
 
     def _handle_discovered_device(self, device: RemoteVoiceDiscoveryDevice) -> None:
         """Handle a newly discovered remote device."""
+        if device.role and device.role != "remote-sender":
+            return
+        if not device.source_id:
+            return
         self._discovered_devices[device.source_id] = device
 
         # Add to list
@@ -139,8 +147,8 @@ class DevicePairingDialog(QDialog):
         message = (
             f"Pairing with: {device.device_name}\n\n"
             f"Pairing Code: {pairing_code}\n\n"
-            "Wake the remote device and speak to it.\n"
-            "Verify the codes match on both screens."
+            "Waiting for remote device to confirm pairing.\n"
+            "Once paired, it will listen for the wake phrase."
         )
         item = QListWidgetItem(message)
         item.setFlags(item.flags() & ~Qt.ItemIsSelectable)
