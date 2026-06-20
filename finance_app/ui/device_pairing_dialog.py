@@ -82,9 +82,12 @@ class DevicePairingDialog(QDialog):
 
     def _handle_discovered_device(self, device: RemoteVoiceDiscoveryDevice) -> None:
         """Handle a newly discovered remote device."""
-        if device.role and device.role != "remote-sender":
+        # Only show explicitly tagged remote senders in this dialog.
+        if device.role != "remote-sender":
             return
         if not device.source_id:
+            return
+        if device.source_id == "finance-main-pc":
             return
         self._discovered_devices[device.source_id] = device
 
