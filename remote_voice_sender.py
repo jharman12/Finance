@@ -83,9 +83,10 @@ class SenderConfig:
 
 
 class SecureRemoteAudioConnection:
-    def __init__(self, config: SenderConfig, pairing_code: str | None = None) -> None:
+    def __init__(self, config: SenderConfig, pairing_code: str | None = None, allow_untrusted: bool = False) -> None:
         self.config = config
         self.pairing_code = pairing_code or ""
+        self.allow_untrusted = allow_untrusted
         self.paired_acknowledged = False
         self.pairing_required = False
         self._socket: ssl.SSLSocket | None = None
@@ -95,11 +96,15 @@ class SecureRemoteAudioConnection:
         if len(self.config.token) < 16:
             raise RuntimeError("Remote audio token must be at least 16 characters long.")
 
-        cafile = Path(self.config.ca_cert_path)
-        if not cafile.exists():
-            raise RuntimeError(f"CA certificate not found at {self.config.ca_cert_path}")
+        cafile = Path(self.config.ca_cert_path).expanduser() if self.config.ca_cert_path else None
+        use_verified_tls = cafile is not None and cafile.exists() and not self.allow_untrusted
 
-        context = ssl.create_default_context(ssl.Purpose.SERVER_AUTH, cafile=str(cafile))
+        if use_verified_tls:
+            context = ssl.create_default_context(ssl.Purpose.SERVER_AUTH, cafile=str(cafile))
+        else:
+            context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+            context.check_hostname = False
+            context.verify_mode = ssl.CERT_NONE
         context.minimum_version = ssl.TLSVersion.TLSv1_2
 
         _debug(
@@ -110,6 +115,8 @@ class SecureRemoteAudioConnection:
         try:
             server_name = self.config.tls_server_name or self.config.host
             self._socket = context.wrap_socket(raw_socket, server_hostname=server_name)
+            if self.allow_untrusted:
+                self._persist_peer_certificate()
             _debug("TLS handshake complete. Sending hello message.")
             self._send_json(
                 {
@@ -147,6 +154,23 @@ class SecureRemoteAudioConnection:
             raw_socket.close()
             self._socket = None
             raise
+
+    def _persist_peer_certificate(self) -> None:
+        sock = self._socket
+        if sock is None:
+            return
+        try:
+            peer_cert_der = sock.getpeercert(binary_form=True)
+        except Exception:
+            return
+        if not peer_cert_der:
+            return
+
+        config_dir = Path.home() / ".finance-voice"
+        config_dir.mkdir(parents=True, exist_ok=True)
+        receiver_cert_path = config_dir / "receiver-ca-cert.pem"
+        receiver_cert_path.write_text(ssl.DER_cert_to_PEM_cert(peer_cert_der), encoding="utf-8")
+        self.config.ca_cert_path = str(receiver_cert_path)
 
     def send_audio(self, chunk: bytes) -> None:
         if not chunk:
@@ -316,7 +340,16 @@ class RemoteWakeStreamSender:
             self.config.host = device.host
         if device.port:
             self.config.port = int(device.port)
-        if not self.config.tls_server_name and device.host:
+        discovered_token = device.properties.get("auth_token", "").strip()
+        if discovered_token:
+            self.config.token = discovered_token
+        discovered_cert_path = device.properties.get("tls_cert_path", "").strip()
+        if discovered_cert_path:
+            self.config.ca_cert_path = discovered_cert_path
+        discovered_tls_server_name = device.properties.get("tls_server_name", "").strip()
+        if discovered_tls_server_name:
+            self.config.tls_server_name = discovered_tls_server_name
+        elif not self.config.tls_server_name and device.host:
             self.config.tls_server_name = device.host
         self._discovery_ready.set()
         self._waiting_for_pair_notice_logged = False
@@ -379,7 +412,12 @@ class RemoteWakeStreamSender:
         if self._pairing_code != self._last_announced_pairing_code:
             self._last_announced_pairing_code = self._pairing_code
             _log(f"Pairing code for verification: {self._pairing_code}")
-        connection = SecureRemoteAudioConnection(self.config, pairing_code=self._pairing_code)
+        allow_untrusted = not self._has_verified_receiver_cert()
+        connection = SecureRemoteAudioConnection(
+            self.config,
+            pairing_code=self._pairing_code,
+            allow_untrusted=allow_untrusted,
+        )
         try:
             connection.connect()
         except Exception as exc:
@@ -403,6 +441,14 @@ class RemoteWakeStreamSender:
         self._paired_with_main = True
         self._waiting_for_pair_notice_logged = False
         _log(f"Paired with main device at {self.config.host}:{self.config.port}. Waiting for wake phrase.")
+
+    def _has_verified_receiver_cert(self) -> bool:
+        if not self.config.ca_cert_path:
+            return False
+        try:
+            return Path(self.config.ca_cert_path).expanduser().exists()
+        except Exception:
+            return False
 
     def _open_stream(self, now: float) -> None:
         if not self.config.host:

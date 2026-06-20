@@ -51,13 +51,20 @@ def build_service_properties(
     device_name: str,
     role: str,
     protocol_version: str,
+    extra_properties: dict[str, str] | None = None,
 ) -> dict[str, bytes]:
-    return {
+    properties = {
         "source_id": source_id.encode("utf-8"),
         "device_name": device_name.encode("utf-8"),
         "role": role.encode("utf-8"),
         "protocol_version": protocol_version.encode("utf-8"),
     }
+    if extra_properties:
+        for key, value in extra_properties.items():
+            if not key:
+                continue
+            properties[str(key)] = str(value).encode("utf-8")
+    return properties
 
 
 def decode_service_properties(properties: dict[Any, Any] | None) -> dict[str, str]:
@@ -98,6 +105,7 @@ class RemoteVoiceDiscoveryPublisher:
         host: str | None = None,
         role: str = "remote-sender",
         protocol_version: str = "1",
+        extra_properties: dict[str, str] | None = None,
     ) -> None:
         self.source_id = source_id
         self.device_name = device_name or source_id
@@ -105,6 +113,7 @@ class RemoteVoiceDiscoveryPublisher:
         self.host = host
         self.role = role
         self.protocol_version = protocol_version
+        self.extra_properties = dict(extra_properties or {})
         self.service_type = SERVICE_TYPE  # Can be overridden before calling start()
         self._zeroconf: Any = None
         self._service_info: Any = None
@@ -123,6 +132,7 @@ class RemoteVoiceDiscoveryPublisher:
             device_name=self.device_name,
             role=self.role,
             protocol_version=self.protocol_version,
+            extra_properties=self.extra_properties,
         )
 
         try:

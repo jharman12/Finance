@@ -271,6 +271,11 @@ class RemoteAudioServer:
             port=self.bound_port,
             device_name=self._discovery_name,
             role="voice-receiver",
+            extra_properties={
+                "auth_token": self.auth_token,
+                "tls_cert_path": self.tls_cert_path or "",
+                "tls_server_name": self.host,
+            },
         )
         discovery_started = False
         try:
