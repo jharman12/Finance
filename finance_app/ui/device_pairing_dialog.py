@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import socket
 from typing import Any
 
 from PyQt5.QtCore import QTimer, Qt, pyqtSignal
@@ -15,7 +16,12 @@ from PyQt5.QtWidgets import (
     QHBoxLayout,
 )
 
-from finance_app.services.voice.discovery import RemoteVoiceDiscoveryBrowser, RemoteVoiceDiscoveryDevice, SERVICE_TYPE_SENDER
+from finance_app.services.voice.discovery import (
+    RemoteVoiceDiscoveryBrowser,
+    RemoteVoiceDiscoveryDevice,
+    SERVICE_TYPE_SENDER,
+    resolve_local_ipv4,
+)
 from finance_app.services.voice.pairing import PairingCodeGenerator
 from finance_app.services.voice.pairing_manager import RemoteVoicePairingManager
 
@@ -34,6 +40,7 @@ class DevicePairingDialog(QDialog):
         self.pairing_manager = pairing_manager
         self._selected_device: RemoteVoiceDiscoveryDevice | None = None
         self._discovered_devices: dict[str, RemoteVoiceDiscoveryDevice] = {}
+        self._local_hosts = self._collect_local_hosts()
         self._discovery_browser: RemoteVoiceDiscoveryBrowser | None = None
         self._pairing_timeout_timer = QTimer()
         self._pairing_timeout_timer.setSingleShot(True)
@@ -89,12 +96,15 @@ class DevicePairingDialog(QDialog):
             return
         if device.source_id == "finance-main-pc":
             return
+        if device.host and device.host in self._local_hosts:
+            return
         self._discovered_devices[device.source_id] = device
 
         # Add to list
         self._device_list.clear()
         for src_id, dev in self._discovered_devices.items():
-            item_text = f"{dev.device_name} ({src_id[:8]}...)"
+            host_suffix = f" - {dev.host}" if dev.host else ""
+            item_text = f"{dev.device_name} ({src_id[:8]}...){host_suffix}"
             item = QListWidgetItem(item_text)
             item.setData(Qt.UserRole, src_id)
             self._device_list.addItem(item)
@@ -110,6 +120,20 @@ class DevicePairingDialog(QDialog):
         """Handle diagnostic messages from discovery."""
         # Silently log for now
         pass
+
+    def _collect_local_hosts(self) -> set[str]:
+        hosts = {"127.0.0.1", "localhost"}
+        try:
+            hosts.add(resolve_local_ipv4())
+        except Exception:
+            pass
+        try:
+            for entry in socket.gethostbyname_ex(socket.gethostname())[2]:
+                if entry:
+                    hosts.add(entry)
+        except Exception:
+            pass
+        return hosts
 
     def _on_pair_clicked(self) -> None:
         """Handle pair button clicked."""
@@ -140,6 +164,7 @@ class DevicePairingDialog(QDialog):
         """Show pairing code and wait for confirmation."""
         self._device_list.setEnabled(False)
         self._pair_button.setEnabled(False)
+        self._pair_button.setText("Pairing In Progress")
 
         # Register with pairing manager
         if self.pairing_manager is not None:
@@ -150,8 +175,11 @@ class DevicePairingDialog(QDialog):
         message = (
             f"Pairing with: {device.device_name}\n\n"
             f"Pairing Code: {pairing_code}\n\n"
-            "Waiting for remote device to confirm pairing.\n"
-            "Once paired, it will listen for the wake phrase."
+            "Remote steps:\n"
+            "1. Look at the remote device console.\n"
+            "2. Confirm it shows the same pairing code.\n"
+            "3. Wait for the paired confirmation.\n\n"
+            "No extra button press is needed on this screen."
         )
         item = QListWidgetItem(message)
         item.setFlags(item.flags() & ~Qt.ItemIsSelectable)
@@ -173,6 +201,7 @@ class DevicePairingDialog(QDialog):
             self._device_list.clear()
             self._device_list.setEnabled(True)
             self._pair_button.setEnabled(True)
+            self._pair_button.setText("Pair Selected Device")
             self._start_discovery()
 
     def on_pairing_confirmed(self, source_id: str, pairing_code: str) -> None:
@@ -180,6 +209,7 @@ class DevicePairingDialog(QDialog):
         self._pairing_timeout_timer.stop()
         if self.pairing_manager is not None:
             self.pairing_manager.cancel_pairing()
+        self._pair_button.setText("Paired")
         self.pairing_confirmed.emit(source_id, pairing_code)
         self.accept()
 

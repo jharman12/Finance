@@ -139,7 +139,7 @@ class RemoteVoiceDiscoveryPublisher:
             server=f"{normalize_label(self.device_name)}.local.",
         )
         self._zeroconf = Zeroconf()
-        self._zeroconf.register_service(self._service_info)
+        self._zeroconf.register_service(self._service_info, allow_name_change=True)
         return True
 
     def stop(self) -> None:

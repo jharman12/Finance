@@ -87,6 +87,7 @@ class SecureRemoteAudioConnection:
         self.config = config
         self.pairing_code = pairing_code or ""
         self.paired_acknowledged = False
+        self.pairing_required = False
         self._socket: ssl.SSLSocket | None = None
         self._seq_no = 0
 
@@ -132,8 +133,10 @@ class SecureRemoteAudioConnection:
                         ack_msg = json.loads(line)
                         if str(ack_msg.get("type", "")).strip().lower() == "hello_ack":
                             self.paired_acknowledged = bool(ack_msg.get("paired", False))
+                            self.pairing_required = bool(ack_msg.get("pairing_required", False))
             except Exception:
                 self.paired_acknowledged = False
+                self.pairing_required = False
             finally:
                 try:
                     self._socket.settimeout(None)
@@ -208,6 +211,8 @@ class RemoteWakeStreamSender:
         self._pair_probe_interval_seconds = 3.0
         self._last_pair_probe_at = 0.0
         self._pairing_code: str | None = None
+        self._last_announced_pairing_code: str | None = None
+        self._waiting_for_pair_notice_logged = False
 
     def run(self) -> int:
         try:
@@ -314,6 +319,7 @@ class RemoteWakeStreamSender:
         if not self.config.tls_server_name and device.host:
             self.config.tls_server_name = device.host
         self._discovery_ready.set()
+        self._waiting_for_pair_notice_logged = False
         _log(f"Discovered Finance Voice Receiver: {device.device_name} at {device.host}:{device.port}")
         self._attempt_pair_probe(force=True)
 
@@ -370,6 +376,9 @@ class RemoteWakeStreamSender:
         self._last_pair_probe_at = current
 
         self._pairing_code = PairingCodeGenerator.generate(self.config.token, self.config.source_id).code
+        if self._pairing_code != self._last_announced_pairing_code:
+            self._last_announced_pairing_code = self._pairing_code
+            _log(f"Pairing code for verification: {self._pairing_code}")
         connection = SecureRemoteAudioConnection(self.config, pairing_code=self._pairing_code)
         try:
             connection.connect()
@@ -383,10 +392,16 @@ class RemoteWakeStreamSender:
 
         connection.close()
         if not connection.paired_acknowledged:
+            if connection.pairing_required:
+                _log("Pairing request sent. If the code matches the main app, pairing should complete shortly.")
+            elif not self._waiting_for_pair_notice_logged:
+                self._waiting_for_pair_notice_logged = True
+                _log("Waiting for you to click 'Pair New Device' on the main app.")
             _debug("Pair probe completed but pairing is not confirmed yet. Waiting for 'Pair New Device' on main app.")
             return
 
         self._paired_with_main = True
+        self._waiting_for_pair_notice_logged = False
         _log(f"Paired with main device at {self.config.host}:{self.config.port}. Waiting for wake phrase.")
 
     def _open_stream(self, now: float) -> None:
