@@ -63,6 +63,7 @@ class DevicePairingDialog(QDialog):
         layout.addWidget(self._discovery_label)
 
         self._device_list = QListWidget()
+        self._device_list.itemSelectionChanged.connect(self._on_selection_changed)
         layout.addWidget(self._device_list)
 
         # Button layout
@@ -82,10 +83,15 @@ class DevicePairingDialog(QDialog):
     def _start_discovery(self) -> None:
         """Start discovering remote senders."""
         self._discovery_browser = RemoteVoiceDiscoveryBrowser(service_type=SERVICE_TYPE_SENDER)
-        self._discovery_browser.start(
+        started = self._discovery_browser.start(
             on_device=lambda device: self.device_discovered_signal.emit(device),
             on_diagnostic=self._handle_diagnostic,
         )
+        if not started:
+            self._discovery_label.setText("Discovery unavailable. Ensure zeroconf is installed and try again.")
+            self._pair_button.setEnabled(False)
+            return
+        self._discovery_label.setText("Searching for available remote devices...")
 
     def _handle_discovered_device(self, device: RemoteVoiceDiscoveryDevice) -> None:
         """Handle a newly discovered remote device."""
@@ -113,13 +119,22 @@ class DevicePairingDialog(QDialog):
         count = len(self._discovered_devices)
         self._discovery_label.setText(f"Found {count} remote device(s). Select one to pair.")
 
-        # Enable pair button if exactly one or more devices
-        self._pair_button.setEnabled(count > 0)
+        self._pair_button.setEnabled(self._device_list.currentItem() is not None)
 
     def _handle_diagnostic(self, payload: dict[str, object]) -> None:
         """Handle diagnostic messages from discovery."""
-        # Silently log for now
-        pass
+        event = str(payload.get("event", "")).strip().lower()
+        if event == "mdns_browser_started":
+            self._discovery_label.setText("Discovery started. Waiting for devices...")
+            return
+        if event == "mdns_service_state":
+            service_name = str(payload.get("service_name", "")).strip()
+            state = str(payload.get("state", "")).strip()
+            if service_name and state:
+                self._discovery_label.setText(f"Discovery update: {state} - {service_name}")
+
+    def _on_selection_changed(self) -> None:
+        self._pair_button.setEnabled(self._device_list.currentItem() is not None)
 
     def _collect_local_hosts(self) -> set[str]:
         hosts = {"127.0.0.1", "localhost"}
@@ -139,11 +154,13 @@ class DevicePairingDialog(QDialog):
         """Handle pair button clicked."""
         current_item = self._device_list.currentItem()
         if current_item is None:
+            self._discovery_label.setText("Select a device before pairing.")
             return
 
         source_id = current_item.data(Qt.UserRole)
         device = self._discovered_devices.get(source_id)
         if device is None:
+            self._discovery_label.setText("Selected device no longer available. Refreshing discovery...")
             return
 
         self._selected_device = device
@@ -189,6 +206,9 @@ class DevicePairingDialog(QDialog):
 
         # Set timeout for pairing (30 seconds)
         self._pairing_timeout_timer.start(30000)
+
+    def get_discovered_device(self, source_id: str) -> RemoteVoiceDiscoveryDevice | None:
+        return self._discovered_devices.get(source_id)
 
     def _on_pairing_timeout(self) -> None:
         """Handle pairing timeout."""

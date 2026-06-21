@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-from finance_app.services.voice.discovery import RemoteVoiceDiscoveryPublisher
+from finance_app.services.voice.discovery import RemoteVoiceDiscoveryPublisher, resolve_local_ipv4
 from finance_app.services.voice.remote_config import RemoteVoiceConfigManager
 
 
@@ -174,6 +174,14 @@ class RemoteAudioServer:
                             except Exception:
                                 pairing_required = False
 
+                        outer._emit_diagnostic(
+                            event="pairing_evaluated",
+                            source_id=source_id,
+                            pairing_code_present=bool(pairing_code),
+                            pairing_verified=pairing_verified,
+                            pairing_required=pairing_required,
+                        )
+
                         try:
                             self.wfile.write(
                                 (
@@ -266,6 +274,10 @@ class RemoteAudioServer:
         self._thread = threading.Thread(target=self._serve, name="RemoteAudioServer", daemon=True)
         self._thread.start()
 
+        advertised_tls_server_name = self.host
+        if advertised_tls_server_name in {"", "0.0.0.0", "::"}:
+            advertised_tls_server_name = resolve_local_ipv4()
+
         self._discovery_publisher = RemoteVoiceDiscoveryPublisher(
             source_id="finance-main-pc",
             port=self.bound_port,
@@ -274,7 +286,7 @@ class RemoteAudioServer:
             extra_properties={
                 "auth_token": self.auth_token,
                 "tls_cert_path": self.tls_cert_path or "",
-                "tls_server_name": self.host,
+                "tls_server_name": advertised_tls_server_name,
             },
         )
         discovery_started = False

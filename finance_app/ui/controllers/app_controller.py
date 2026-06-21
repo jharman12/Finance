@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from finance_app.models import PairedRemoteDevice
 from finance_app.storage import FinanceRepository
 
 
@@ -24,3 +25,6 @@ class AppController:
 
     def materialize_due_recurring_items(self) -> None:
         self._repository.materialize_due_recurring_items()
+
+    def save_paired_remote_device(self, device: PairedRemoteDevice) -> PairedRemoteDevice:
+        return self._repository.save_paired_remote_device(device)

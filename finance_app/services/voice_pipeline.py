@@ -199,6 +199,54 @@ class VoiceCoordinator:
         self.router.on_wake = self._emit_wake
         self.router.on_command = self._emit_command
 
+    def set_remote_audio_enabled(self, enabled: bool) -> tuple[bool, str]:
+        """Enable or disable remote audio receiver availability."""
+        self._remote_audio_enabled = bool(enabled)
+        if not self._remote_audio_enabled:
+            if self.remote_stream is not None:
+                self.remote_stream.stop()
+                self.remote_stream = None
+            self._emit_diagnostic(stage="remote_pairing_disabled")
+            return True, ""
+
+        if self.remote_stream is None:
+            self.remote_stream = self._build_remote_stream_source()
+        if self.remote_stream is None:
+            message = "Remote voice receiver could not be configured. Check token/TLS settings."
+            self._emit_diagnostic(stage="remote_pairing_unavailable", reason="build_failed")
+            return False, message
+
+        self._emit_diagnostic(stage="remote_pairing_enabled", host=self.remote_stream.server.host, port=self.remote_stream.bound_port)
+        return True, ""
+
+    def ensure_remote_pairing_ready(self) -> tuple[bool, str]:
+        """Ensure the remote receiver server is running so pairing callbacks can arrive."""
+        ok, message = self.set_remote_audio_enabled(True)
+        if not ok:
+            return False, message
+
+        if self.remote_stream is None:
+            return False, "Remote voice receiver is unavailable."
+
+        try:
+            self.remote_stream.start(
+                on_audio_chunk=self._handle_remote_audio_chunk,
+                on_status=self._emit_status,
+                on_error=self._handle_stream_error,
+                on_diagnostic=self._emit_diagnostic,
+            )
+        except Exception as exc:
+            error_message = f"Remote receiver failed to start: {exc}"
+            self._emit_diagnostic(stage="remote_pairing_unavailable", reason="start_failed", error=str(exc))
+            return False, error_message
+
+        self._emit_diagnostic(
+            stage="remote_pairing_ready",
+            host=self.remote_stream.server.host,
+            port=self.remote_stream.bound_port,
+        )
+        return True, ""
+
     def start(self) -> None:
         if not self._initialize_wake_detector():
             return

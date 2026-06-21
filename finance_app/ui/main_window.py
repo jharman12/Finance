@@ -2,7 +2,7 @@
 
 import csv
 from collections import deque
-from datetime import date
+from datetime import date, datetime
 import calendar
 import html
 import math
@@ -48,7 +48,7 @@ from PyQt5.QtWidgets import (
 
 from finance_app.config import APP_NAME
 from finance_app.chart_models import CashflowChartsPayload, PositionChartsPayload
-from finance_app.models import Asset, AssistantResult, Transaction
+from finance_app.models import Asset, AssistantResult, PairedRemoteDevice, Transaction
 from finance_app.services.assistant_service import AssistantService
 from finance_app.services.voice.action_safety import (
     evaluate_voice_command_event,
@@ -2843,10 +2843,13 @@ class MainWindow(QMainWindow):
         self._set_remote_voice_enabled(checked)
         if checked:
             self.remote_voice_status_label.setText("Enabled - waiting for pairs...")
-            self.voice_coordinator._remote_audio_enabled = True
+            ok, message = self.voice_coordinator.set_remote_audio_enabled(True)
+            if not ok:
+                self.remote_voice_status_label.setText("Enabled - receiver setup failed")
+                self.status_bar.showMessage(message, 6000)
         else:
             self.remote_voice_status_label.setText("Disabled")
-            self.voice_coordinator._remote_audio_enabled = False
+            self.voice_coordinator.set_remote_audio_enabled(False)
 
     def _on_pair_new_device_clicked(self) -> None:
         """Handle 'Pair New Device' button clicked."""
@@ -2871,8 +2874,34 @@ class MainWindow(QMainWindow):
         if self.voice_coordinator and hasattr(self.voice_coordinator, 'pairing_manager'):
             pairing_manager = self.voice_coordinator.pairing_manager
 
+        pairing_ready = False
+        pairing_ready_message = "Voice coordinator unavailable for pairing."
+        if self.voice_coordinator is not None:
+            pairing_ready, pairing_ready_message = self.voice_coordinator.ensure_remote_pairing_ready()
+
+        if not pairing_ready:
+            QMessageBox.warning(
+                self,
+                "Remote Receiver Not Ready",
+                pairing_ready_message,
+            )
+            self.status_bar.showMessage(pairing_ready_message, 6000)
+            return
+
+        if self.voice_coordinator is not None and self.voice_coordinator.remote_stream is not None:
+            self.status_bar.showMessage(
+                f"Remote receiver ready on port {self.voice_coordinator.remote_stream.bound_port}.",
+                5000,
+            )
+
         dialog = DevicePairingDialog(auth_token, pairing_manager=pairing_manager, parent=self)
-        dialog.pairing_confirmed.connect(self._on_device_pairing_confirmed)
+        dialog.pairing_confirmed.connect(
+            lambda source_id, pairing_code: self._on_device_pairing_confirmed(
+                source_id,
+                pairing_code,
+                dialog.get_discovered_device(source_id),
+            )
+        )
         dialog.pairing_cancelled.connect(self._on_device_pairing_cancelled)
         
         # Wire pairing manager callback to notify dialog
@@ -2885,9 +2914,30 @@ class MainWindow(QMainWindow):
         if pairing_manager is not None:
             pairing_manager.set_callbacks(on_confirmed=None)
 
-    def _on_device_pairing_confirmed(self, source_id: str, pairing_code: str) -> None:
+    def _on_device_pairing_confirmed(self, source_id: str, pairing_code: str, device: object | None = None) -> None:
         """Handle device pairing confirmed."""
         from PyQt5.QtWidgets import QMessageBox
+
+        if device is not None:
+            host = str(getattr(device, "host", "") or "")
+            port = int(getattr(device, "port", 0) or 0)
+            device_name = str(getattr(device, "device_name", "") or source_id)
+            protocol_version = str(getattr(device, "protocol_version", "") or "1")
+            role = str(getattr(device, "role", "") or "remote-sender")
+            paired_device = PairedRemoteDevice(
+                id=None,
+                source_id=source_id,
+                device_name=device_name,
+                host_ip=host,
+                port=port,
+                role=role,
+                protocol_version=protocol_version,
+                paired_at=datetime.now(),
+                last_connected_at=None,
+                is_active=True,
+            )
+            self.app_controller.save_paired_remote_device(paired_device)
+
         QMessageBox.information(
             self,
             "Device Paired",
