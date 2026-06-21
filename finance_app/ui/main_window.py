@@ -2862,7 +2862,6 @@ class MainWindow(QMainWindow):
             auth_token = credentials.auth_token
         except Exception as exc:
             # Log error and show message
-            from PyQt5.QtWidgets import QMessageBox
             QMessageBox.warning(
                 self,
                 "Error",
@@ -2916,8 +2915,6 @@ class MainWindow(QMainWindow):
 
     def _on_device_pairing_confirmed(self, source_id: str, pairing_code: str, device: object | None = None) -> None:
         """Handle device pairing confirmed."""
-        from PyQt5.QtWidgets import QMessageBox
-
         if device is not None:
             host = str(getattr(device, "host", "") or "")
             port = int(getattr(device, "port", 0) or 0)

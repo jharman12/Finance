@@ -661,9 +661,14 @@ class VoiceCoordinator:
         if self.on_partial:
             self.on_partial(partial_text)
 
-    def _emit_diagnostic(self, **payload: Any) -> None:
+    def _emit_diagnostic(self, payload: dict[str, Any] | None = None, **extra: Any) -> None:
+        merged: dict[str, Any] = {}
+        if isinstance(payload, dict):
+            merged.update(payload)
+        if extra:
+            merged.update(extra)
         if self.on_diagnostic:
-            self.on_diagnostic(payload)
+            self.on_diagnostic(merged)
 
     def _build_remote_stream_source(self) -> RemoteStreamSource | None:
         if not self._remote_audio_enabled:

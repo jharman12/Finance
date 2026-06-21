@@ -50,6 +50,7 @@ class RemoteVoicePairingManager:
 
         Returns True if pairing is confirmed, False otherwise.
         """
+        callback: Callable[[str, str], None] | None = None
         with self._lock:
             if self._pairing_state is None:
                 return False
@@ -63,14 +64,25 @@ class RemoteVoicePairingManager:
                 return False
 
             self._pairing_state.confirmed = True
-            confirmed = True
-        
+            callback = self._on_pairing_confirmed
 
-        # Call callback outside lock
-        if confirmed and self._on_pairing_confirmed is not None:
-            self._on_pairing_confirmed(source_id, pairing_code)
+        # Notify UI asynchronously so network handshake can respond immediately.
+        if callback is not None:
+            threading.Thread(
+                target=self._safe_invoke_callback,
+                args=(callback, source_id, pairing_code),
+                name="RemotePairingConfirmed",
+                daemon=True,
+            ).start()
 
         return True
+
+    @staticmethod
+    def _safe_invoke_callback(callback: Callable[[str, str], None], source_id: str, pairing_code: str) -> None:
+        try:
+            callback(source_id, pairing_code)
+        except Exception:
+            return
 
     def get_pairing_state(self) -> PairingState | None:
         """Get current pairing state."""

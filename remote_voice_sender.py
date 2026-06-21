@@ -127,7 +127,7 @@ class SecureRemoteAudioConnection:
                 }
             )
             try:
-                self._socket.settimeout(1.5)
+                self._socket.settimeout(4.0)
                 ack_raw = b""
                 while b"\n" not in ack_raw:
                     part = self._socket.recv(4096)

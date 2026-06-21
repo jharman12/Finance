@@ -305,3 +305,9 @@
 {"ts": "2026-06-21T11:55:57.428342+00:00", "event": "endpoint_complete", "utterance_id": 1, "reason": "continuation_timeout", "speech_ms": 600}
 {"ts": "2026-06-21T11:55:57.428342+00:00", "event": "command_dispatch", "utterance_id": 1, "source_id": "local-usb-mic", "provider": "fake", "confidence": 0.95, "latency_ms": 42, "used_fallback": false, "fallback_reason": null, "chars": 21}
 {"ts": "2026-06-21T11:55:57.428342+00:00", "event": "cooldown_started", "utterance_id": 1, "seconds": 0.0}
+{"ts": "2026-06-21T11:58:30.242844+00:00", "event": "voice_stopped"}
+{"ts": "2026-06-21T11:59:31.019806+00:00", "event": "voice_stopped"}
+{"ts": "2026-06-21T12:02:41.721315+00:00", "event": "voice_stopped"}
+{"ts": "2026-06-21T12:03:32.920792+00:00", "event": "voice_stopped"}
+{"ts": "2026-06-21T12:06:45.420739+00:00", "event": "voice_stopped"}
+{"ts": "2026-06-21T12:06:48.172428+00:00", "event": "voice_stopped"}
