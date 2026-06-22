@@ -116,6 +116,27 @@ class VoicePipelineIntegrationTests(unittest.TestCase):
         self.assertEqual(getattr(event, "source_id", None), "local-usb-mic")
         self.assertTrue(str(getattr(event, "session_id", "")).startswith("voice-"))
 
+    def test_remote_audio_dispatches_without_second_wake(self) -> None:
+        coordinator = self._build_coordinator()
+        events: list[object] = []
+        diagnostics: list[dict[str, object]] = []
+        coordinator.on_command_event = events.append
+        coordinator.on_diagnostic = diagnostics.append
+
+        coordinator._handle_remote_audio_chunk("remote-node", b"SPEECH")  # noqa: SLF001
+        coordinator._handle_remote_audio_chunk("remote-node", b"SILENCE")  # noqa: SLF001
+        if coordinator._awaiting_continuation:  # noqa: SLF001
+            coordinator._continuation_deadline = 0.0  # noqa: SLF001
+            coordinator._handle_remote_audio_chunk("remote-node", b"SILENCE")  # noqa: SLF001
+
+        self.assertEqual(len(events), 1)
+        event = events[0]
+        self.assertEqual(getattr(event, "text", None), "add groceries expense")
+        self.assertEqual(getattr(event, "source_id", None), "remote-node")
+        remote_start = [entry for entry in diagnostics if entry.get("stage") == "remote_capture_start"]
+        self.assertEqual(len(remote_start), 1)
+        self.assertEqual(remote_start[0].get("source_id"), "remote-node")
+
 
 if __name__ == "__main__":
     unittest.main()

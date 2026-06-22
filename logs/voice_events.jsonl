@@ -569,3 +569,164 @@
 {"ts": "2026-06-22T19:25:13.577199+00:00", "event": "endpoint_complete", "utterance_id": 1, "reason": "continuation_timeout", "speech_ms": 600}
 {"ts": "2026-06-22T19:25:13.577199+00:00", "event": "command_dispatch", "utterance_id": 1, "source_id": "local-usb-mic", "provider": "fake", "confidence": 0.95, "latency_ms": 42, "used_fallback": false, "fallback_reason": null, "chars": 21}
 {"ts": "2026-06-22T19:25:13.577199+00:00", "event": "cooldown_started", "utterance_id": 1, "seconds": 0.0}
+{"ts": "2026-06-22T19:27:20.064926+00:00", "event": "voice_started", "wake_mode": "phrase_vosk"}
+{"ts": "2026-06-22T19:27:20.064926+00:00", "event": "remote_audio_started", "bind_port": 45881, "local_mic_enabled": true}
+{"ts": "2026-06-22T19:33:38.264127+00:00", "event": "wake_detected", "source_id": "local-usb-mic", "wake_mode": "phrase_vosk", "utterance_id": 1}
+{"ts": "2026-06-22T19:33:38.264127+00:00", "event": "continuation_window_started", "utterance_id": 1, "seconds": 0.5}
+{"ts": "2026-06-22T19:33:38.264127+00:00", "event": "continuation_timeout", "utterance_id": 1, "waited_seconds": 0.5}
+{"ts": "2026-06-22T19:33:38.264127+00:00", "event": "endpoint_complete", "utterance_id": 1, "reason": "continuation_timeout", "speech_ms": 600}
+{"ts": "2026-06-22T19:33:38.264127+00:00", "event": "command_dispatch", "utterance_id": 1, "source_id": "local-usb-mic", "provider": "fake", "confidence": 0.95, "latency_ms": 42, "used_fallback": false, "fallback_reason": null, "chars": 21}
+{"ts": "2026-06-22T19:33:38.264127+00:00", "event": "cooldown_started", "utterance_id": 1, "seconds": 0.0}
+{"ts": "2026-06-22T19:33:38.264127+00:00", "event": "wake_detected", "source_id": "local-usb-mic", "wake_mode": "phrase_vosk", "utterance_id": 1}
+{"ts": "2026-06-22T19:33:38.264127+00:00", "event": "continuation_window_started", "utterance_id": 1, "seconds": 0.5}
+{"ts": "2026-06-22T19:33:38.264127+00:00", "event": "continuation_resumed", "utterance_id": 1}
+{"ts": "2026-06-22T19:33:38.264127+00:00", "event": "continuation_window_started", "utterance_id": 1, "seconds": 0.5}
+{"ts": "2026-06-22T19:33:38.264127+00:00", "event": "continuation_timeout", "utterance_id": 1, "waited_seconds": 0.5}
+{"ts": "2026-06-22T19:33:38.264127+00:00", "event": "endpoint_complete", "utterance_id": 1, "reason": "continuation_timeout", "speech_ms": 600}
+{"ts": "2026-06-22T19:33:38.264127+00:00", "event": "command_dispatch", "utterance_id": 1, "source_id": "local-usb-mic", "provider": "fake", "confidence": 0.95, "latency_ms": 42, "used_fallback": false, "fallback_reason": null, "chars": 21}
+{"ts": "2026-06-22T19:33:38.264127+00:00", "event": "cooldown_started", "utterance_id": 1, "seconds": 0.0}
+{"ts": "2026-06-22T19:33:38.272677+00:00", "event": "wake_detected", "source_id": "local-usb-mic", "wake_mode": "phrase_vosk", "utterance_id": 1}
+{"ts": "2026-06-22T19:33:38.272677+00:00", "event": "continuation_window_started", "utterance_id": 1, "seconds": 0.5}
+{"ts": "2026-06-22T19:33:38.273701+00:00", "event": "continuation_timeout", "utterance_id": 1, "waited_seconds": 0.5}
+{"ts": "2026-06-22T19:33:38.273701+00:00", "event": "endpoint_complete", "utterance_id": 1, "reason": "continuation_timeout", "speech_ms": 600}
+{"ts": "2026-06-22T19:33:38.273701+00:00", "event": "command_dispatch", "utterance_id": 1, "source_id": "local-usb-mic", "provider": "fake", "confidence": 0.95, "latency_ms": 42, "used_fallback": false, "fallback_reason": null, "chars": 21}
+{"ts": "2026-06-22T19:33:38.273701+00:00", "event": "cooldown_started", "utterance_id": 1, "seconds": 0.0}
+{"ts": "2026-06-22T19:36:23.027349+00:00", "event": "wake_detected", "source_id": "JenkinsEnvy", "wake_mode": "phrase_vosk", "utterance_id": 1}
+{"ts": "2026-06-22T19:39:14.704894+00:00", "event": "wake_detected", "source_id": "local-usb-mic", "wake_mode": "phrase_vosk", "utterance_id": 1}
+{"ts": "2026-06-22T19:39:14.704894+00:00", "event": "continuation_window_started", "utterance_id": 1, "seconds": 0.5}
+{"ts": "2026-06-22T19:39:14.704894+00:00", "event": "continuation_timeout", "utterance_id": 1, "waited_seconds": 0.5}
+{"ts": "2026-06-22T19:39:14.704894+00:00", "event": "endpoint_complete", "utterance_id": 1, "reason": "continuation_timeout", "speech_ms": 600}
+{"ts": "2026-06-22T19:39:14.705914+00:00", "event": "command_dispatch", "utterance_id": 1, "source_id": "local-usb-mic", "provider": "fake", "confidence": 0.95, "latency_ms": 42, "used_fallback": false, "fallback_reason": null, "chars": 21}
+{"ts": "2026-06-22T19:39:14.705914+00:00", "event": "cooldown_started", "utterance_id": 1, "seconds": 0.0}
+{"ts": "2026-06-22T19:39:14.707921+00:00", "event": "wake_detected", "source_id": "local-usb-mic", "wake_mode": "phrase_vosk", "utterance_id": 1}
+{"ts": "2026-06-22T19:39:14.707921+00:00", "event": "continuation_window_started", "utterance_id": 1, "seconds": 0.5}
+{"ts": "2026-06-22T19:39:14.707921+00:00", "event": "continuation_resumed", "utterance_id": 1}
+{"ts": "2026-06-22T19:39:14.708925+00:00", "event": "continuation_window_started", "utterance_id": 1, "seconds": 0.5}
+{"ts": "2026-06-22T19:39:14.708925+00:00", "event": "continuation_timeout", "utterance_id": 1, "waited_seconds": 0.5}
+{"ts": "2026-06-22T19:39:14.708925+00:00", "event": "endpoint_complete", "utterance_id": 1, "reason": "continuation_timeout", "speech_ms": 600}
+{"ts": "2026-06-22T19:39:14.709928+00:00", "event": "command_dispatch", "utterance_id": 1, "source_id": "local-usb-mic", "provider": "fake", "confidence": 0.95, "latency_ms": 42, "used_fallback": false, "fallback_reason": null, "chars": 21}
+{"ts": "2026-06-22T19:39:14.709928+00:00", "event": "cooldown_started", "utterance_id": 1, "seconds": 0.0}
+{"ts": "2026-06-22T19:39:14.710932+00:00", "event": "wake_detected", "source_id": "local-usb-mic", "wake_mode": "phrase_vosk", "utterance_id": 1}
+{"ts": "2026-06-22T19:39:14.711935+00:00", "event": "continuation_window_started", "utterance_id": 1, "seconds": 0.5}
+{"ts": "2026-06-22T19:39:14.711935+00:00", "event": "continuation_timeout", "utterance_id": 1, "waited_seconds": 0.5}
+{"ts": "2026-06-22T19:39:14.711935+00:00", "event": "endpoint_complete", "utterance_id": 1, "reason": "continuation_timeout", "speech_ms": 600}
+{"ts": "2026-06-22T19:39:14.712939+00:00", "event": "command_dispatch", "utterance_id": 1, "source_id": "local-usb-mic", "provider": "fake", "confidence": 0.95, "latency_ms": 42, "used_fallback": false, "fallback_reason": null, "chars": 21}
+{"ts": "2026-06-22T19:39:14.712939+00:00", "event": "cooldown_started", "utterance_id": 1, "seconds": 0.0}
+{"ts": "2026-06-22T19:44:14.668302+00:00", "event": "wake_detected", "source_id": "local-usb-mic", "wake_mode": "phrase_vosk", "utterance_id": 1}
+{"ts": "2026-06-22T19:44:14.668302+00:00", "event": "continuation_window_started", "utterance_id": 1, "seconds": 0.5}
+{"ts": "2026-06-22T19:44:14.668302+00:00", "event": "continuation_timeout", "utterance_id": 1, "waited_seconds": 0.5}
+{"ts": "2026-06-22T19:44:14.668302+00:00", "event": "endpoint_complete", "utterance_id": 1, "reason": "continuation_timeout", "speech_ms": 600}
+{"ts": "2026-06-22T19:44:14.668302+00:00", "event": "command_dispatch", "utterance_id": 1, "source_id": "local-usb-mic", "provider": "fake", "confidence": 0.95, "latency_ms": 42, "used_fallback": false, "fallback_reason": null, "chars": 21}
+{"ts": "2026-06-22T19:44:14.668302+00:00", "event": "cooldown_started", "utterance_id": 1, "seconds": 0.0}
+{"ts": "2026-06-22T19:44:14.668302+00:00", "event": "wake_detected", "source_id": "local-usb-mic", "wake_mode": "phrase_vosk", "utterance_id": 1}
+{"ts": "2026-06-22T19:44:14.668302+00:00", "event": "continuation_window_started", "utterance_id": 1, "seconds": 0.5}
+{"ts": "2026-06-22T19:44:14.668302+00:00", "event": "continuation_resumed", "utterance_id": 1}
+{"ts": "2026-06-22T19:44:14.668302+00:00", "event": "continuation_window_started", "utterance_id": 1, "seconds": 0.5}
+{"ts": "2026-06-22T19:44:14.668302+00:00", "event": "continuation_timeout", "utterance_id": 1, "waited_seconds": 0.5}
+{"ts": "2026-06-22T19:44:14.668302+00:00", "event": "endpoint_complete", "utterance_id": 1, "reason": "continuation_timeout", "speech_ms": 600}
+{"ts": "2026-06-22T19:44:14.668302+00:00", "event": "command_dispatch", "utterance_id": 1, "source_id": "local-usb-mic", "provider": "fake", "confidence": 0.95, "latency_ms": 42, "used_fallback": false, "fallback_reason": null, "chars": 21}
+{"ts": "2026-06-22T19:44:14.668302+00:00", "event": "cooldown_started", "utterance_id": 1, "seconds": 0.0}
+{"ts": "2026-06-22T19:44:14.668302+00:00", "event": "wake_detected", "source_id": "local-usb-mic", "wake_mode": "phrase_vosk", "utterance_id": 1}
+{"ts": "2026-06-22T19:44:14.668302+00:00", "event": "continuation_window_started", "utterance_id": 1, "seconds": 0.5}
+{"ts": "2026-06-22T19:44:14.668302+00:00", "event": "continuation_timeout", "utterance_id": 1, "waited_seconds": 0.5}
+{"ts": "2026-06-22T19:44:14.668302+00:00", "event": "endpoint_complete", "utterance_id": 1, "reason": "continuation_timeout", "speech_ms": 600}
+{"ts": "2026-06-22T19:44:14.668302+00:00", "event": "command_dispatch", "utterance_id": 1, "source_id": "local-usb-mic", "provider": "fake", "confidence": 0.95, "latency_ms": 42, "used_fallback": false, "fallback_reason": null, "chars": 21}
+{"ts": "2026-06-22T19:44:14.668302+00:00", "event": "cooldown_started", "utterance_id": 1, "seconds": 0.0}
+{"ts": "2026-06-22T19:44:14.679573+00:00", "event": "remote_capture_start", "source_id": "remote-node", "utterance_id": 1}
+{"ts": "2026-06-22T19:44:14.679573+00:00", "event": "continuation_window_started", "utterance_id": 1, "seconds": 0.5}
+{"ts": "2026-06-22T19:44:14.680597+00:00", "event": "continuation_timeout", "utterance_id": 1, "waited_seconds": 0.5}
+{"ts": "2026-06-22T19:44:14.680597+00:00", "event": "endpoint_complete", "utterance_id": 1, "reason": "continuation_timeout", "speech_ms": 600}
+{"ts": "2026-06-22T19:44:14.680597+00:00", "event": "command_dispatch", "utterance_id": 1, "source_id": "remote-node", "provider": "fake", "confidence": 0.95, "latency_ms": 42, "used_fallback": false, "fallback_reason": null, "chars": 21}
+{"ts": "2026-06-22T19:44:14.681598+00:00", "event": "cooldown_started", "utterance_id": 1, "seconds": 0.0}
+{"ts": "2026-06-22T19:45:17.843004+00:00", "event": "remote_capture_start", "source_id": "JenkinsEnvy", "utterance_id": 1}
+{"ts": "2026-06-22T19:45:21.665598+00:00", "event": "continuation_window_started", "utterance_id": 1, "seconds": 0.7}
+{"ts": "2026-06-22T19:45:22.210086+00:00", "event": "continuation_resumed", "utterance_id": 1}
+{"ts": "2026-06-22T19:45:23.303101+00:00", "event": "continuation_window_started", "utterance_id": 1, "seconds": 0.7}
+{"ts": "2026-06-22T19:45:24.216525+00:00", "event": "continuation_timeout", "utterance_id": 1, "waited_seconds": 0.7}
+{"ts": "2026-06-22T19:45:24.248424+00:00", "event": "endpoint_complete", "utterance_id": 1, "reason": "continuation_timeout", "speech_ms": 1900}
+{"ts": "2026-06-22T19:45:33.194329+00:00", "event": "command_dispatch", "utterance_id": 1, "source_id": "JenkinsEnvy", "provider": "vosk", "confidence": 0.65, "latency_ms": 8922, "used_fallback": true, "fallback_reason": "provider_error", "chars": 12}
+{"ts": "2026-06-22T19:45:33.194329+00:00", "event": "cooldown_started", "utterance_id": 1, "seconds": 0.7}
+{"ts": "2026-06-22T19:45:34.406637+00:00", "event": "remote_capture_start", "source_id": "JenkinsEnvy", "utterance_id": 2}
+{"ts": "2026-06-22T19:45:58.106863+00:00", "event": "assistant_voice_result", "request_source": "voice", "assistant_session_key": "voice::JenkinsEnvy", "source_id": "JenkinsEnvy", "command_session_id": "voice-1", "provider": "vosk", "confidence": 0.65, "applied_actions": 0, "action_count": 0, "display_tables": 0}
+{"ts": "2026-06-22T19:46:14.362039+00:00", "event": "endpoint_complete", "utterance_id": 2, "reason": "max_utterance", "speech_ms": 100}
+{"ts": "2026-06-22T20:05:07.777830+00:00", "event": "wake_detected", "source_id": "local-usb-mic", "wake_mode": "phrase_vosk", "utterance_id": 1}
+{"ts": "2026-06-22T20:05:07.777830+00:00", "event": "continuation_window_started", "utterance_id": 1, "seconds": 0.5}
+{"ts": "2026-06-22T20:05:07.777830+00:00", "event": "continuation_timeout", "utterance_id": 1, "waited_seconds": 0.5}
+{"ts": "2026-06-22T20:05:07.778834+00:00", "event": "endpoint_complete", "utterance_id": 1, "reason": "continuation_timeout", "speech_ms": 600}
+{"ts": "2026-06-22T20:05:07.778834+00:00", "event": "command_dispatch", "utterance_id": 1, "source_id": "local-usb-mic", "provider": "fake", "confidence": 0.95, "latency_ms": 42, "used_fallback": false, "fallback_reason": null, "chars": 21}
+{"ts": "2026-06-22T20:05:07.778834+00:00", "event": "cooldown_started", "utterance_id": 1, "seconds": 0.0}
+{"ts": "2026-06-22T20:05:07.780841+00:00", "event": "wake_detected", "source_id": "local-usb-mic", "wake_mode": "phrase_vosk", "utterance_id": 1}
+{"ts": "2026-06-22T20:05:07.780841+00:00", "event": "continuation_window_started", "utterance_id": 1, "seconds": 0.5}
+{"ts": "2026-06-22T20:05:07.780841+00:00", "event": "continuation_resumed", "utterance_id": 1}
+{"ts": "2026-06-22T20:05:07.781845+00:00", "event": "continuation_window_started", "utterance_id": 1, "seconds": 0.5}
+{"ts": "2026-06-22T20:05:07.781845+00:00", "event": "continuation_timeout", "utterance_id": 1, "waited_seconds": 0.5}
+{"ts": "2026-06-22T20:05:07.781845+00:00", "event": "endpoint_complete", "utterance_id": 1, "reason": "continuation_timeout", "speech_ms": 600}
+{"ts": "2026-06-22T20:05:07.781845+00:00", "event": "command_dispatch", "utterance_id": 1, "source_id": "local-usb-mic", "provider": "fake", "confidence": 0.95, "latency_ms": 42, "used_fallback": false, "fallback_reason": null, "chars": 21}
+{"ts": "2026-06-22T20:05:07.782848+00:00", "event": "cooldown_started", "utterance_id": 1, "seconds": 0.0}
+{"ts": "2026-06-22T20:05:07.783867+00:00", "event": "wake_detected", "source_id": "local-usb-mic", "wake_mode": "phrase_vosk", "utterance_id": 1}
+{"ts": "2026-06-22T20:05:07.783867+00:00", "event": "continuation_window_started", "utterance_id": 1, "seconds": 0.5}
+{"ts": "2026-06-22T20:05:07.784870+00:00", "event": "continuation_timeout", "utterance_id": 1, "waited_seconds": 0.5}
+{"ts": "2026-06-22T20:05:07.784870+00:00", "event": "endpoint_complete", "utterance_id": 1, "reason": "continuation_timeout", "speech_ms": 600}
+{"ts": "2026-06-22T20:05:07.784870+00:00", "event": "command_dispatch", "utterance_id": 1, "source_id": "local-usb-mic", "provider": "fake", "confidence": 0.95, "latency_ms": 42, "used_fallback": false, "fallback_reason": null, "chars": 21}
+{"ts": "2026-06-22T20:05:07.785876+00:00", "event": "cooldown_started", "utterance_id": 1, "seconds": 0.0}
+{"ts": "2026-06-22T20:05:07.786882+00:00", "event": "remote_capture_start", "source_id": "remote-node", "utterance_id": 1}
+{"ts": "2026-06-22T20:05:07.786882+00:00", "event": "continuation_window_started", "utterance_id": 1, "seconds": 0.5}
+{"ts": "2026-06-22T20:05:07.787886+00:00", "event": "continuation_timeout", "utterance_id": 1, "waited_seconds": 0.5}
+{"ts": "2026-06-22T20:05:07.787886+00:00", "event": "endpoint_complete", "utterance_id": 1, "reason": "continuation_timeout", "speech_ms": 600}
+{"ts": "2026-06-22T20:05:07.787886+00:00", "event": "command_dispatch", "utterance_id": 1, "source_id": "remote-node", "provider": "fake", "confidence": 0.95, "latency_ms": 42, "used_fallback": false, "fallback_reason": null, "chars": 21}
+{"ts": "2026-06-22T20:05:07.788889+00:00", "event": "cooldown_started", "utterance_id": 1, "seconds": 0.0}
+{"ts": "2026-06-22T20:07:02.441909+00:00", "event": "remote_capture_start", "source_id": "JenkinsEnvy", "utterance_id": 1}
+{"ts": "2026-06-22T20:07:05.321923+00:00", "event": "continuation_window_started", "utterance_id": 1, "seconds": 0.7}
+{"ts": "2026-06-22T20:07:05.736254+00:00", "event": "continuation_resumed", "utterance_id": 1}
+{"ts": "2026-06-22T20:07:06.764932+00:00", "event": "continuation_window_started", "utterance_id": 1, "seconds": 0.7}
+{"ts": "2026-06-22T20:07:07.242937+00:00", "event": "continuation_resumed", "utterance_id": 1}
+{"ts": "2026-06-22T20:07:08.999408+00:00", "event": "continuation_window_started", "utterance_id": 1, "seconds": 0.7}
+{"ts": "2026-06-22T20:07:11.018573+00:00", "event": "continuation_timeout", "utterance_id": 1, "waited_seconds": 0.7}
+{"ts": "2026-06-22T20:07:11.065901+00:00", "event": "endpoint_complete", "utterance_id": 1, "reason": "continuation_timeout", "speech_ms": 2200}
+{"ts": "2026-06-22T20:07:23.241621+00:00", "event": "command_dispatch", "utterance_id": 1, "source_id": "JenkinsEnvy", "provider": "vosk", "confidence": 0.65, "latency_ms": 12157, "used_fallback": true, "fallback_reason": "provider_error", "chars": 12}
+{"ts": "2026-06-22T20:07:23.257606+00:00", "event": "cooldown_started", "utterance_id": 1, "seconds": 0.7}
+{"ts": "2026-06-22T20:07:24.734760+00:00", "event": "remote_capture_start", "source_id": "JenkinsEnvy", "utterance_id": 2}
+{"ts": "2026-06-22T20:07:31.765829+00:00", "event": "assistant_voice_result", "request_source": "voice", "assistant_session_key": "voice::JenkinsEnvy", "source_id": "JenkinsEnvy", "command_session_id": "voice-1", "provider": "vosk", "confidence": 0.65, "applied_actions": 0, "action_count": 0, "display_tables": 0}
+{"ts": "2026-06-22T20:07:45.100318+00:00", "event": "voice_started", "wake_mode": "phrase_vosk"}
+{"ts": "2026-06-22T20:07:45.100318+00:00", "event": "remote_audio_started", "bind_port": 45881, "local_mic_enabled": true}
+{"ts": "2026-06-22T20:08:15.683929+00:00", "event": "wake_detected", "source_id": "local-usb-mic", "wake_mode": "phrase_vosk", "utterance_id": 3}
+{"ts": "2026-06-22T20:08:19.485858+00:00", "event": "continuation_window_started", "utterance_id": 3, "seconds": 0.7}
+{"ts": "2026-06-22T20:08:20.240262+00:00", "event": "continuation_timeout", "utterance_id": 3, "waited_seconds": 0.7}
+{"ts": "2026-06-22T20:08:20.260358+00:00", "event": "endpoint_complete", "utterance_id": 3, "reason": "continuation_timeout", "speech_ms": 600}
+{"ts": "2026-06-22T20:08:24.150437+00:00", "event": "command_dispatch", "utterance_id": 3, "source_id": "local-usb-mic", "provider": "vosk", "confidence": 0.65, "latency_ms": 3876, "used_fallback": true, "fallback_reason": "provider_error", "chars": 21}
+{"ts": "2026-06-22T20:08:24.150437+00:00", "event": "cooldown_started", "utterance_id": 3, "seconds": 0.7}
+{"ts": "2026-06-22T20:08:25.160493+00:00", "event": "wake_detected", "source_id": "local-usb-mic", "wake_mode": "phrase_vosk", "utterance_id": 4}
+{"ts": "2026-06-22T20:08:35.660671+00:00", "event": "continuation_window_started", "utterance_id": 4, "seconds": 0.7}
+{"ts": "2026-06-22T20:08:36.510389+00:00", "event": "continuation_timeout", "utterance_id": 4, "waited_seconds": 0.7}
+{"ts": "2026-06-22T20:08:36.525496+00:00", "event": "endpoint_complete", "utterance_id": 4, "reason": "continuation_timeout", "speech_ms": 400}
+{"ts": "2026-06-22T20:08:41.002484+00:00", "event": "command_dispatch", "utterance_id": 4, "source_id": "local-usb-mic", "provider": "vosk", "confidence": 0.65, "latency_ms": 4471, "used_fallback": true, "fallback_reason": "provider_error", "chars": 7}
+{"ts": "2026-06-22T20:08:41.010594+00:00", "event": "cooldown_started", "utterance_id": 4, "seconds": 0.7}
+{"ts": "2026-06-22T20:08:41.960747+00:00", "event": "wake_detected", "source_id": "local-usb-mic", "wake_mode": "phrase_vosk", "utterance_id": 5}
+{"ts": "2026-06-22T20:08:45.927554+00:00", "event": "continuation_window_started", "utterance_id": 5, "seconds": 0.7}
+{"ts": "2026-06-22T20:08:46.750567+00:00", "event": "continuation_timeout", "utterance_id": 5, "waited_seconds": 0.7}
+{"ts": "2026-06-22T20:08:46.756598+00:00", "event": "endpoint_complete", "utterance_id": 5, "reason": "continuation_timeout", "speech_ms": 400}
+{"ts": "2026-06-22T20:08:50.200741+00:00", "event": "command_dispatch", "utterance_id": 5, "source_id": "local-usb-mic", "provider": "vosk", "confidence": 0.65, "latency_ms": 3432, "used_fallback": true, "fallback_reason": "provider_error", "chars": 3}
+{"ts": "2026-06-22T20:08:50.200741+00:00", "event": "cooldown_started", "utterance_id": 5, "seconds": 0.7}
+{"ts": "2026-06-22T20:08:51.190772+00:00", "event": "wake_detected", "source_id": "local-usb-mic", "wake_mode": "phrase_vosk", "utterance_id": 6}
+{"ts": "2026-06-22T20:08:59.190920+00:00", "event": "continuation_window_started", "utterance_id": 6, "seconds": 0.7}
+{"ts": "2026-06-22T20:08:59.920595+00:00", "event": "continuation_timeout", "utterance_id": 6, "waited_seconds": 0.7}
+{"ts": "2026-06-22T20:08:59.930622+00:00", "event": "endpoint_complete", "utterance_id": 6, "reason": "continuation_timeout", "speech_ms": 400}
+{"ts": "2026-06-22T20:09:04.093805+00:00", "event": "command_dispatch", "utterance_id": 6, "source_id": "local-usb-mic", "provider": "vosk", "confidence": 0.65, "latency_ms": 4160, "used_fallback": true, "fallback_reason": "provider_error", "chars": 7}
+{"ts": "2026-06-22T20:09:04.093805+00:00", "event": "cooldown_started", "utterance_id": 6, "seconds": 0.7}
+{"ts": "2026-06-22T20:09:05.051041+00:00", "event": "wake_detected", "source_id": "local-usb-mic", "wake_mode": "phrase_vosk", "utterance_id": 7}
+{"ts": "2026-06-22T20:09:16.221255+00:00", "event": "continuation_window_started", "utterance_id": 7, "seconds": 0.7}
+{"ts": "2026-06-22T20:09:16.919410+00:00", "event": "continuation_timeout", "utterance_id": 7, "waited_seconds": 0.7}
+{"ts": "2026-06-22T20:09:16.935268+00:00", "event": "endpoint_complete", "utterance_id": 7, "reason": "continuation_timeout", "speech_ms": 1100}
+{"ts": "2026-06-22T20:09:21.830794+00:00", "event": "command_dispatch", "utterance_id": 7, "source_id": "local-usb-mic", "provider": "vosk", "confidence": 0.65, "latency_ms": 4883, "used_fallback": true, "fallback_reason": "provider_error", "chars": 28}
+{"ts": "2026-06-22T20:09:21.830794+00:00", "event": "cooldown_started", "utterance_id": 7, "seconds": 0.7}
+{"ts": "2026-06-22T20:09:22.960825+00:00", "event": "wake_detected", "source_id": "local-usb-mic", "wake_mode": "phrase_vosk", "utterance_id": 8}
+{"ts": "2026-06-22T20:09:26.820971+00:00", "event": "continuation_window_started", "utterance_id": 8, "seconds": 0.7}
+{"ts": "2026-06-22T20:09:27.520872+00:00", "event": "continuation_timeout", "utterance_id": 8, "waited_seconds": 0.7}
+{"ts": "2026-06-22T20:09:27.530388+00:00", "event": "endpoint_complete", "utterance_id": 8, "reason": "continuation_timeout", "speech_ms": 400}
+{"ts": "2026-06-22T20:09:30.690893+00:00", "event": "command_dispatch", "utterance_id": 8, "source_id": "local-usb-mic", "provider": "vosk", "confidence": 0.65, "latency_ms": 3150, "used_fallback": true, "fallback_reason": "provider_error", "chars": 3}
+{"ts": "2026-06-22T20:09:30.692896+00:00", "event": "cooldown_started", "utterance_id": 8, "seconds": 0.7}
+{"ts": "2026-06-22T20:09:31.661094+00:00", "event": "wake_detected", "source_id": "local-usb-mic", "wake_mode": "phrase_vosk", "utterance_id": 9}
+{"ts": "2026-06-22T20:09:43.471045+00:00", "event": "endpoint_complete", "utterance_id": 9, "reason": "max_utterance", "speech_ms": 200}
+{"ts": "2026-06-22T20:09:46.890860+00:00", "event": "voice_stopped"}
+{"ts": "2026-06-22T20:09:47.210643+00:00", "event": "command_dispatch", "utterance_id": 9, "source_id": "local-usb-mic", "provider": "vosk", "confidence": 0.65, "latency_ms": 3735, "used_fallback": true, "fallback_reason": "provider_error", "chars": 13}
+{"ts": "2026-06-22T20:09:47.210643+00:00", "event": "cooldown_started", "utterance_id": 9, "seconds": 0.7}

@@ -263,6 +263,7 @@ class RemoteWakeStreamSender:
         self._pairing_code: str | None = None
         self._last_announced_pairing_code: str | None = None
         self._waiting_for_pair_notice_logged = False
+        self._stream_had_speech = False
 
     def run(self) -> int:
         try:
@@ -410,7 +411,10 @@ class RemoteWakeStreamSender:
             return
 
         if now >= (self._stream_started_at + self.config.max_stream_seconds):
-            self._close_stream(reason="max_stream_seconds")
+            timeout_reason = "max_stream_seconds"
+            if not self._stream_had_speech:
+                timeout_reason = "max_stream_seconds_no_speech"
+            self._close_stream(reason=timeout_reason)
             return
 
         if now < self._grace_deadline:
@@ -419,6 +423,9 @@ class RemoteWakeStreamSender:
         if self._grace_reset_pending:
             self.endpoint.reset()
             self._grace_reset_pending = False
+
+        if self.endpoint.is_speech_chunk(chunk):
+            self._stream_had_speech = True
 
         decision = self.endpoint.process_chunk(chunk, self.config.sample_rate)
         if decision.utterance_complete:
@@ -617,6 +624,7 @@ class RemoteWakeStreamSender:
         self._stream_started_at = now
         self._grace_deadline = now + (self.config.post_wake_grace_ms / 1000.0)
         self._grace_reset_pending = True
+        self._stream_had_speech = False
         self.endpoint.reset()
         _log(
             f"Wake detected. Streaming to {self.config.host}:{self.config.port} over TLS as {self.config.source_id}."
@@ -629,10 +637,30 @@ class RemoteWakeStreamSender:
         self._stream_started_at = 0.0
         self._grace_deadline = 0.0
         self._grace_reset_pending = False
-        self._cooldown_until = time.monotonic() + self.config.cooldown_seconds
+        self._stream_had_speech = False
+
+        cooldown_seconds = self.config.cooldown_seconds
+        if reason == "max_stream_seconds_no_speech":
+            # A wake-triggered stream that never crosses speech energy is likely
+            # a false positive. Use a stronger cooldown to avoid rapid reopen loops.
+            cooldown_seconds = max(cooldown_seconds, 3.0)
+
+        self._cooldown_until = time.monotonic() + cooldown_seconds
+        self._reset_wake_detector_state()
         if connection is not None:
             connection.close()
             _log(f"Remote stream closed ({reason}).")
+
+    def _reset_wake_detector_state(self) -> None:
+        """Reset detector session state between streams to prevent stale matches."""
+        try:
+            self.wake_detector.stop()
+        except Exception:
+            pass
+        try:
+            self.wake_detector.start()
+        except Exception as exc:
+            _debug(f"Wake detector reset failed: {exc}")
 
     def _detect_wake(self, chunk: bytes) -> bool:
         try:

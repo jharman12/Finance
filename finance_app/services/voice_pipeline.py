@@ -152,6 +152,7 @@ class VoiceCoordinator:
         self._capture_chunks: list[bytes] = []
         self._preroll_chunks: deque[bytes] = deque(maxlen=8)
         self._state_lock = threading.Lock()
+        self._audio_processing_lock = threading.Lock()
         self._utterance_id = 0
         self._cooldown_seconds = float(os.getenv("FINANCE_APP_VOICE_COOLDOWN_SECONDS", "0.7"))
         self._cooldown_until = 0.0
@@ -163,6 +164,7 @@ class VoiceCoordinator:
         self._awaiting_continuation = False
         self._continuation_deadline = 0.0
         self._stopping = False
+        self._wake_detector_started = False
 
         telemetry_path = os.getenv("FINANCE_APP_VOICE_TELEMETRY_PATH", str(Path("logs") / "voice_events.jsonl"))
         self.telemetry = VoiceTelemetryLogger(Path(telemetry_path))
@@ -229,6 +231,13 @@ class VoiceCoordinator:
         if self.remote_stream is None:
             return False, "Remote voice receiver is unavailable."
 
+        # Pairing-only flows still need the wake + ASR pipeline armed so remote
+        # packets are actually processed even if the local "Start Voice" button
+        # was never pressed.
+        self._stopping = False
+        if not self._ensure_wake_pipeline_ready():
+            return False, "Wake detector could not be initialized."
+
         try:
             self.remote_stream.start(
                 on_audio_chunk=self._handle_remote_audio_chunk,
@@ -250,7 +259,7 @@ class VoiceCoordinator:
 
     def start(self) -> None:
         self._stopping = False
-        if not self._initialize_wake_detector():
+        if not self._ensure_wake_pipeline_ready():
             return
 
         with self._state_lock:
@@ -304,6 +313,7 @@ class VoiceCoordinator:
                 self._wake_detector.stop()
             except Exception:
                 pass
+        self._wake_detector_started = False
         with self._state_lock:
             self.state = VoiceSessionState.IDLE
             self._capture_chunks.clear()
@@ -351,8 +361,10 @@ class VoiceCoordinator:
 
         try:
             detector.start()
+            self._wake_detector_started = True
             return True
         except Exception as exc:
+            self._wake_detector_started = False
             self._emit_error(f"Failed to initialize wake detector ({getattr(detector, 'name', 'unknown')}): {exc}")
             # Fallback to phrase wake if optional detector fails.
             if self.wake_mode == "openwakeword":
@@ -361,6 +373,11 @@ class VoiceCoordinator:
                 return self._initialize_wake_detector()
             return False
 
+    def _ensure_wake_pipeline_ready(self) -> bool:
+        if self._wake_detector_started:
+            return True
+        return self._initialize_wake_detector()
+
     def _handle_audio_chunk(self, chunk: bytes) -> None:
         self._handle_audio_chunk_from_source(self.source_id, chunk)
 
@@ -368,29 +385,50 @@ class VoiceCoordinator:
         self._handle_audio_chunk_from_source(source_id, chunk)
 
     def _handle_audio_chunk_from_source(self, source_id: str, chunk: bytes) -> None:
-        if self._stopping:
-            return
-        if not chunk:
-            return
+        # Remote server callbacks and local mic callbacks can arrive from
+        # different threads. Vosk recognizers are not thread-safe, so serialize
+        # all chunk handling through one lock to avoid decoder corruption.
+        with self._audio_processing_lock:
+            if self._stopping:
+                return
+            if not chunk:
+                return
 
-        with self._state_lock:
-            self._preroll_chunks.append(chunk)
-            state = self.state
-            in_cooldown = self._in_cooldown_locked()
-            self._active_source_id = source_id or self.source_id
+            with self._state_lock:
+                self._preroll_chunks.append(chunk)
+                state = self.state
+                in_cooldown = self._in_cooldown_locked()
+                self._active_source_id = source_id or self.source_id
 
-        if state in (VoiceSessionState.DECODING, VoiceSessionState.DISPATCHING, VoiceSessionState.ERROR):
-            return
+            if state in (VoiceSessionState.DECODING, VoiceSessionState.DISPATCHING, VoiceSessionState.ERROR):
+                return
 
-        if in_cooldown:
-            return
+            if in_cooldown:
+                return
 
-        if state == VoiceSessionState.IDLE:
-            self._process_wake_chunk(chunk, source_id=self._active_source_id)
-            return
+            if state == VoiceSessionState.IDLE:
+                # Remote sender already performs wake detection before opening
+                # the stream. Do not require a second wake detection on main.
+                if self._active_source_id != self.source_id:
+                    self._begin_capture_session(self._active_source_id)
+                    self._emit_status("Remote stream active. Listening for command...")
+                    self._emit_diagnostic(
+                        stage="remote_capture_start",
+                        source_id=self._active_source_id,
+                        wake_mode=self.wake_mode,
+                        utterance_id=self._utterance_id,
+                    )
+                    self.telemetry.log(
+                        "remote_capture_start",
+                        source_id=self._active_source_id,
+                        utterance_id=self._utterance_id,
+                    )
+                    return
+                self._process_wake_chunk(chunk, source_id=self._active_source_id)
+                return
 
-        if state == VoiceSessionState.CAPTURING:
-            self._process_capture_chunk(chunk)
+            if state == VoiceSessionState.CAPTURING:
+                self._process_capture_chunk(chunk)
 
     def _process_wake_chunk(self, chunk: bytes, source_id: str) -> None:
         detector = self._wake_detector
@@ -407,19 +445,7 @@ class VoiceCoordinator:
         if not detected:
             return
 
-        with self._state_lock:
-            self.state = VoiceSessionState.WAKE_DETECTED
-            self.state = VoiceSessionState.CAPTURING
-            self.endpoint.reset()
-            self._capture_chunks = list(self._preroll_chunks)
-            self._utterance_id += 1
-            utterance_id = self._utterance_id
-            self._initialize_partial_preview_recognizer_locked()
-            self._last_partial_preview = ""
-            self._last_partial_emit_at = 0.0
-            self._awaiting_continuation = False
-            self._continuation_deadline = 0.0
-            self._active_source_id = source_id or self.source_id
+        utterance_id = self._begin_capture_session(source_id)
 
         self._emit_wake(self._active_source_id)
         self._emit_status("Wake detected. Listening for command...")
@@ -435,6 +461,22 @@ class VoiceCoordinator:
             wake_mode=self.wake_mode,
             utterance_id=utterance_id,
         )
+
+    def _begin_capture_session(self, source_id: str) -> int:
+        with self._state_lock:
+            self.state = VoiceSessionState.WAKE_DETECTED
+            self.state = VoiceSessionState.CAPTURING
+            self.endpoint.reset()
+            self._capture_chunks = list(self._preroll_chunks)
+            self._utterance_id += 1
+            utterance_id = self._utterance_id
+            self._initialize_partial_preview_recognizer_locked()
+            self._last_partial_preview = ""
+            self._last_partial_emit_at = 0.0
+            self._awaiting_continuation = False
+            self._continuation_deadline = 0.0
+            self._active_source_id = source_id or self.source_id
+            return utterance_id
 
     def _process_capture_chunk(self, chunk: bytes) -> None:
         self._emit_partial_preview(chunk)

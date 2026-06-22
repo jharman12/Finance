@@ -1,0 +1,32 @@
+[RemoteAudioServer DEBUG] Client authenticated source_id=JenkinsEnvy, tls=True
+[RemoteAudioServer DEBUG] Hello received source_id=JenkinsEnvy, pairing_code_present=False
+[RemoteAudioServer DEBUG] Sending hello_ack source_id=JenkinsEnvy, paired=False, pairing_required=False
+[RemoteAudioServer DEBUG] Audio packet from source_id=JenkinsEnvy seq=1 bytes=3200 count=1
+LOG (VoskAPI:ReadDataFiles():model.cc:213) Decoding params beam=13 max-active=7000 lattice-beam=6
+LOG (VoskAPI:ReadDataFiles():model.cc:216) Silence phones 1:2:3:4:5:11:12:13:14:15
+LOG (VoskAPI:RemoveOrphanNodes():nnet-nnet.cc:948) Removed 0 orphan nodes.
+LOG (VoskAPI:RemoveOrphanComponents():nnet-nnet.cc:847) Removing 0 orphan components.
+LOG (VoskAPI:ReadDataFiles():model.cc:248) Loading i-vector extractor from models/vosk-model-en-us-0.22-lgraph/ivector/final.ie
+LOG (VoskAPI:ComputeDerivedVars():ivector-extractor.cc:183) Computing derived variables for iVector extractor
+LOG (VoskAPI:ComputeDerivedVars():ivector-extractor.cc:204) Done.
+LOG (VoskAPI:ReadDataFiles():model.cc:282) Loading HCL and G from models/vosk-model-en-us-0.22-lgraph/graph/HCLr.fst models/vosk-model-en-us-0.22-lgraph/graph/Gr.fst
+LOG (VoskAPI:ReadDataFiles():model.cc:308) Loading winfo models/vosk-model-en-us-0.22-lgraph/graph/phones/word_boundary.int
+[RemoteAudioServer DEBUG] Connection accepted from ('192.168.1.158', 57506), tls=True
+[RemoteAudioServer DEBUG] Client authenticated source_id=JenkinsEnvy, tls=True
+[RemoteAudioServer DEBUG] Hello received source_id=JenkinsEnvy, pairing_code_present=False
+[RemoteAudioServer DEBUG] Sending hello_ack source_id=JenkinsEnvy, paired=False, pairing_required=False
+[RemoteAudioServer DEBUG] Audio packet from source_id=JenkinsEnvy seq=1 bytes=3200 count=1
+[RemoteAudioServer DEBUG] Audio packet from source_id=JenkinsEnvy seq=50 bytes=3200 count=50
+[RemoteAudioServer DEBUG] Audio packet from source_id=JenkinsEnvy seq=50 bytes=3200 count=50
+LOG (VoskAPI:ReadDataFiles():model.cc:213) Decoding params beam=13 max-active=7000 lattice-beam=6
+LOG (VoskAPI:ReadDataFiles():model.cc:216) Silence phones 1:2:3:4:5:11:12:13:14:15
+LOG (VoskAPI:RemoveOrphanNodes():nnet-nnet.cc:948) Removed 0 orphan nodes.
+LOG (VoskAPI:RemoveOrphanComponents():nnet-nnet.cc:847) Removing 0 orphan components.
+LOG (VoskAPI:ReadDataFiles():model.cc:248) Loading i-vector extractor from models\vosk-model-en-us-0.22-lgraph/ivector/final.ie
+LOG (VoskAPI:ComputeDerivedVars():ivector-extractor.cc:183) Computing derived variables for iVector extractor
+LOG (VoskAPI:ComputeDerivedVars():ivector-extractor.cc:204) Done.
+LOG (VoskAPI:ReadDataFiles():model.cc:282) Loading HCL and G from models\vosk-model-en-us-0.22-lgraph/graph/HCLr.fst models\vosk-model-en-us-0.22-lgraph/graph/Gr.fst
+LOG (VoskAPI:ReadDataFiles():model.cc:308) Loading winfo models\vosk-model-en-us-0.22-lgraph/graph/phones/word_boundary.int
+LOG (VoskAPI:RebuildRepository():determinize-lattice-pruned.cc:283) Rebuilding repository.
+LOG (VoskAPI:RebuildRepository():determinize-lattice-pruned.cc:283) Rebuilding repository.
+WARNING (VoskAPI:CheckMemoryUsage():determinize-lattice-pruned.cc:316) Did not reach requested beam in determinize-lattice: size exceeds maximum 50000000 bytes; (repo,arcs,elems) = (24058368,962176,25026264), after rebuilding, repo size was 16700672, effective beam was 5.67675 vs. requested beam 6
