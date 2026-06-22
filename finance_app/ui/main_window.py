@@ -108,6 +108,7 @@ class MainWindow(QMainWindow):
         self._active_assistant_request_context: dict[str, object] | None = None
         self._assistant_worker: AssistantWorker | None = None
         self._ollama_warmup_worker: OllamaWarmupWorker | None = None
+        self._is_closing = False
         self._selected_year = date.today().year
         self._selected_month = date.today().month
         self._selected_asset_id: int | None = None
@@ -4863,6 +4864,15 @@ class MainWindow(QMainWindow):
         self.voice_coordinator.on_partial = self.voice_partial_signal.emit
         self.voice_coordinator.on_diagnostic = self.voice_diagnostic_signal.emit
 
+    def _unbind_voice_coordinator_callbacks(self) -> None:
+        self.voice_coordinator.on_status = None
+        self.voice_coordinator.on_error = None
+        self.voice_coordinator.on_wake = None
+        self.voice_coordinator.on_command = None
+        self.voice_coordinator.on_command_event = None
+        self.voice_coordinator.on_partial = None
+        self.voice_coordinator.on_diagnostic = None
+
     def _voice_start_button_label(self) -> str:
         return f"Start Voice ({self._display_wake_phrase()})"
 
@@ -5209,6 +5219,8 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event) -> None:  # type: ignore[override]
         try:
+            self._is_closing = True
+            self._unbind_voice_coordinator_callbacks()
             self.voice_coordinator.stop()
         finally:
             super().closeEvent(event)

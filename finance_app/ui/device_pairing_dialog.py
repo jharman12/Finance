@@ -32,6 +32,7 @@ class DevicePairingDialog(QDialog):
     pairing_confirmed = pyqtSignal(str, str)  # Signals (source_id, pairing_code)
     pairing_cancelled = pyqtSignal()
     device_discovered_signal = pyqtSignal(object)
+    diagnostic_signal = pyqtSignal(object)
     pairing_verified_signal = pyqtSignal(str, str)
 
     def __init__(self, auth_token: str, pairing_manager: RemoteVoicePairingManager | None = None, parent: Any = None) -> None:
@@ -46,6 +47,7 @@ class DevicePairingDialog(QDialog):
         self._pairing_timeout_timer.setSingleShot(True)
         self._pairing_timeout_timer.timeout.connect(self._on_pairing_timeout)
         self.device_discovered_signal.connect(self._handle_discovered_device)
+        self.diagnostic_signal.connect(self._handle_diagnostic)
         self.pairing_verified_signal.connect(self.on_pairing_confirmed)
 
         self.setWindowTitle("Pair Remote Voice Device")
@@ -85,7 +87,7 @@ class DevicePairingDialog(QDialog):
         self._discovery_browser = RemoteVoiceDiscoveryBrowser(service_type=SERVICE_TYPE_SENDER)
         started = self._discovery_browser.start(
             on_device=lambda device: self.device_discovered_signal.emit(device),
-            on_diagnostic=self._handle_diagnostic,
+            on_diagnostic=lambda payload: self.diagnostic_signal.emit(payload),
         )
         if not started:
             self._discovery_label.setText("Discovery unavailable. Ensure zeroconf is installed and try again.")

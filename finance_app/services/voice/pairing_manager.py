@@ -66,14 +66,10 @@ class RemoteVoicePairingManager:
             self._pairing_state.confirmed = True
             callback = self._on_pairing_confirmed
 
-        # Notify UI asynchronously so network handshake can respond immediately.
+        # Keep callback invocation synchronous here; UI dispatch should be marshaled
+        # by the callback target via Qt queued signals.
         if callback is not None:
-            threading.Thread(
-                target=self._safe_invoke_callback,
-                args=(callback, source_id, pairing_code),
-                name="RemotePairingConfirmed",
-                daemon=True,
-            ).start()
+            self._safe_invoke_callback(callback, source_id, pairing_code)
 
         return True
 

@@ -68,28 +68,36 @@ class PairedRemoteDeviceRepository:
 
         with self.connection_factory() as conn:
             if device.id is None:
-                cursor = conn.execute(
-                    """
-                    INSERT INTO paired_remote_devices
-                    (source_id, device_name, host_ip, port, role, protocol_version, paired_at, last_connected_at, is_active)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        device.source_id,
-                        device.device_name,
-                        device.host_ip,
-                        normalized_port,
-                        device.role,
-                        device.protocol_version,
-                        device.paired_at.isoformat() if isinstance(device.paired_at, datetime) else device.paired_at,
-                        device.last_connected_at.isoformat()
-                        if device.last_connected_at and isinstance(device.last_connected_at, datetime)
-                        else device.last_connected_at,
-                        1 if device.is_active else 0,
-                    ),
-                )
-                device.id = cursor.lastrowid
-            else:
+                existing_row = conn.execute(
+                    "SELECT id FROM paired_remote_devices WHERE source_id = ?",
+                    (device.source_id,),
+                ).fetchone()
+                if existing_row is not None:
+                    device.id = int(existing_row["id"])
+                else:
+                    cursor = conn.execute(
+                        """
+                        INSERT INTO paired_remote_devices
+                        (source_id, device_name, host_ip, port, role, protocol_version, paired_at, last_connected_at, is_active)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            device.source_id,
+                            device.device_name,
+                            device.host_ip,
+                            normalized_port,
+                            device.role,
+                            device.protocol_version,
+                            device.paired_at.isoformat() if isinstance(device.paired_at, datetime) else device.paired_at,
+                            device.last_connected_at.isoformat()
+                            if device.last_connected_at and isinstance(device.last_connected_at, datetime)
+                            else device.last_connected_at,
+                            1 if device.is_active else 0,
+                        ),
+                    )
+                    device.id = cursor.lastrowid
+
+            if device.id is not None:
                 conn.execute(
                     """
                     UPDATE paired_remote_devices

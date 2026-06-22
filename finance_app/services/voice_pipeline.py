@@ -162,6 +162,7 @@ class VoiceCoordinator:
         self._continuation_window_seconds = float(os.getenv("FINANCE_APP_VOICE_CONTINUATION_SECONDS", "0.7"))
         self._awaiting_continuation = False
         self._continuation_deadline = 0.0
+        self._stopping = False
 
         telemetry_path = os.getenv("FINANCE_APP_VOICE_TELEMETRY_PATH", str(Path("logs") / "voice_events.jsonl"))
         self.telemetry = VoiceTelemetryLogger(Path(telemetry_path))
@@ -248,6 +249,7 @@ class VoiceCoordinator:
         return True, ""
 
     def start(self) -> None:
+        self._stopping = False
         if not self._initialize_wake_detector():
             return
 
@@ -293,6 +295,7 @@ class VoiceCoordinator:
         self._emit_diagnostic(stage="started", wake_mode=self.wake_mode)
 
     def stop(self) -> None:
+        self._stopping = True
         self.stream.stop()
         if self.remote_stream is not None:
             self.remote_stream.stop()
@@ -315,6 +318,13 @@ class VoiceCoordinator:
             self._active_source_id = self.source_id
         self.telemetry.log("voice_stopped")
         self._emit_diagnostic(stage="stopped")
+        self.on_status = None
+        self.on_error = None
+        self.on_wake = None
+        self.on_command = None
+        self.on_command_event = None
+        self.on_partial = None
+        self.on_diagnostic = None
 
     def ingest_remote_text(self, text: str, source_id: str = "remote-node", is_final: bool = True) -> None:
         """Future expansion point for remote Alexa-like devices."""
@@ -358,6 +368,8 @@ class VoiceCoordinator:
         self._handle_audio_chunk_from_source(source_id, chunk)
 
     def _handle_audio_chunk_from_source(self, source_id: str, chunk: bytes) -> None:
+        if self._stopping:
+            return
         if not chunk:
             return
 
@@ -658,10 +670,14 @@ class VoiceCoordinator:
         self._emit_partial(normalized_preview)
 
     def _emit_partial(self, partial_text: str) -> None:
+        if self._stopping:
+            return
         if self.on_partial:
             self.on_partial(partial_text)
 
     def _emit_diagnostic(self, payload: dict[str, Any] | None = None, **extra: Any) -> None:
+        if self._stopping:
+            return
         merged: dict[str, Any] = {}
         if isinstance(payload, dict):
             merged.update(payload)
@@ -745,18 +761,26 @@ class VoiceCoordinator:
             return False
 
     def _emit_status(self, message: str) -> None:
+        if self._stopping:
+            return
         if self.on_status:
             self.on_status(message)
 
     def _emit_error(self, message: str) -> None:
+        if self._stopping:
+            return
         if self.on_error:
             self.on_error(message)
 
     def _emit_wake(self, source_id: str) -> None:
+        if self._stopping:
+            return
         if self.on_wake:
             self.on_wake(source_id)
 
     def _emit_command(self, command_event: VoiceCommandEvent) -> None:
+        if self._stopping:
+            return
         if self.on_command_event:
             self.on_command_event(command_event)
         if self.on_command:
