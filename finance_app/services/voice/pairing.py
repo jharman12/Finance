@@ -30,13 +30,13 @@ class PairingCodeGenerator:
     def generate(auth_token: str, source_id: str, timestamp: float | None = None, code_length: int = 6) -> PairingCode:
         """Generate a deterministic pairing code from token and source ID.
 
-        The code changes every 60 seconds, so tokens need to be re-verified frequently.
+        The code is stable for a given token and source ID during a pairing session.
+        Timestamp is accepted for API compatibility but not used in current generation.
         """
         if timestamp is None:
             timestamp = time.time()
 
-        time_window = int(timestamp / 60)
-        combined = f"{auth_token}:{source_id}:{time_window}".encode("utf-8")
+        combined = f"{auth_token}:{source_id}".encode("utf-8")
         digest = hashlib.sha256(combined).digest()
 
         code_chars = []
@@ -51,17 +51,30 @@ class PairingCodeGenerator:
     def verify(code_to_verify: str, auth_token: str, source_id: str, timestamp: float | None = None) -> bool:
         """Verify that a pairing code matches expected value.
 
-        Checks current window and adjacent windows (previous/next) for time skew tolerance.
+        Accepts current stable code and legacy minute-window codes for compatibility.
         """
         if timestamp is None:
             timestamp = time.time()
 
         code_to_verify_normalized = code_to_verify.upper().strip()
 
+        expected_stable = PairingCodeGenerator.generate(auth_token, source_id, timestamp)
+        if expected_stable.code == code_to_verify_normalized:
+            return True
+
+        # Backward compatibility for older minute-window code generation.
         for window_offset in (-1, 0, 1):
             check_time = timestamp + (window_offset * 60)
-            expected = PairingCodeGenerator.generate(auth_token, source_id, check_time)
-            if expected.code == code_to_verify_normalized:
+            time_window = int(check_time / 60)
+            combined = f"{auth_token}:{source_id}:{time_window}".encode("utf-8")
+            digest = hashlib.sha256(combined).digest()
+            code_chars = []
+            for i in range(6):
+                byte_val = digest[i]
+                char_index = byte_val % len(PairingCodeGenerator.ALPHABET)
+                code_chars.append(PairingCodeGenerator.ALPHABET[char_index])
+            expected = "".join(code_chars)
+            if expected == code_to_verify_normalized:
                 return True
 
         return False
