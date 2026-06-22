@@ -436,10 +436,14 @@ class RemoteWakeStreamSender:
         if paired_acknowledged:
             self._paired_with_main = True
             self._waiting_for_pair_notice_logged = False
+            self._pairing_code = None
+            self._last_announced_pairing_code = None
             _log(f"Paired with main device at {self.config.host}:{self.config.port}. Waiting for wake phrase.")
             return
 
         if not pairing_required:
+            self._pairing_code = None
+            self._last_announced_pairing_code = None
             if not self._waiting_for_pair_notice_logged:
                 self._waiting_for_pair_notice_logged = True
                 _log("Waiting for you to select a device and click 'Pair Selected Device' on the main app.")
@@ -447,7 +451,8 @@ class RemoteWakeStreamSender:
             return
 
         # Phase 2: active pairing mode is open on main, now send pairing code.
-        self._pairing_code = PairingCodeGenerator.generate(self.config.token, self.config.source_id).code
+        if not self._pairing_code:
+            self._pairing_code = PairingCodeGenerator.generate(self.config.token, self.config.source_id).code
         if self._pairing_code != self._last_announced_pairing_code:
             self._last_announced_pairing_code = self._pairing_code
             _log(f"Pairing code for verification: {self._pairing_code}")
@@ -469,6 +474,8 @@ class RemoteWakeStreamSender:
 
         self._paired_with_main = True
         self._waiting_for_pair_notice_logged = False
+        self._pairing_code = None
+        self._last_announced_pairing_code = None
         _log(f"Paired with main device at {self.config.host}:{self.config.port}. Waiting for wake phrase.")
 
     def _connect_pair_probe(self, pairing_code: str) -> SecureRemoteAudioConnection | None:
