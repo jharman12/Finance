@@ -110,6 +110,11 @@ class SecureRemoteAudioConnection:
 
         if use_verified_tls:
             context = ssl.create_default_context(ssl.Purpose.SERVER_AUTH, cafile=str(cafile))
+            # receiver-ca-cert.pem is a pinned peer certificate captured from the
+            # main receiver; disable hostname checks and rely on cert pinning to
+            # avoid SAN/CN mismatch failures when connecting by IP.
+            if cafile is not None and cafile.name.lower() == "receiver-ca-cert.pem":
+                context.check_hostname = False
         else:
             context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
             context.check_hostname = False
@@ -554,10 +559,10 @@ class RemoteWakeStreamSender:
                 self._cooldown_until = time.monotonic() + self.config.cooldown_seconds
                 return
 
-        self._pairing_code = PairingCodeGenerator.generate(self.config.token, self.config.source_id).code
-        _log(f"Pairing code for verification: {self._pairing_code}")
-
-        connection = SecureRemoteAudioConnection(self.config, pairing_code=self._pairing_code)
+        # After successful pairing, normal stream connections do not need to
+        # re-submit a one-time pairing code.
+        self._pairing_code = None
+        connection = SecureRemoteAudioConnection(self.config, pairing_code="")
         try:
             connection.connect()
             _debug(f"Sending preroll buffer chunks={len(self._preroll_buffer)}")
@@ -570,7 +575,7 @@ class RemoteWakeStreamSender:
                 connection.close()
                 refresh_connection = SecureRemoteAudioConnection(
                     self.config,
-                    pairing_code=self._pairing_code,
+                    pairing_code="",
                     allow_untrusted=True,
                 )
                 try:
