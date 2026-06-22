@@ -228,7 +228,17 @@ class DevicePairingDialog(QDialog):
 
     def on_pairing_confirmed(self, source_id: str, pairing_code: str) -> None:
         """Called when pairing is confirmed by connection handler."""
-        self._pairing_timeout_timer.stop()
+        # Guard: if we were already accepted/rejected (e.g. a late queued signal
+        # arrives after dialog was closed), do nothing.
+        if not self.isVisible():
+            return
+        # Explicitly stop and disconnect the timer before accept() so that the
+        # QTimer is inert before any possible GC, breaking the reference cycle.
+        try:
+            self._pairing_timeout_timer.stop()
+            self._pairing_timeout_timer.timeout.disconnect()
+        except RuntimeError:
+            pass
         if self.pairing_manager is not None:
             self.pairing_manager.cancel_pairing()
         self._pair_button.setText("Paired")
@@ -255,7 +265,15 @@ class DevicePairingDialog(QDialog):
                 self._discovery_browser.stop()
             except Exception:
                 pass
-        self._pairing_timeout_timer.stop()
+        # Fully neutralise the QTimer before the dialog can be garbage-collected
+        # on any thread.  Disconnecting the signal breaks the reference cycle
+        # dialog → timer → connection → dialog, preventing cyclic-GC from
+        # destroying the QTimer on a background thread.
+        try:
+            self._pairing_timeout_timer.stop()
+            self._pairing_timeout_timer.timeout.disconnect()
+        except RuntimeError:
+            pass
         super().closeEvent(event)
 
     def confirm_pairing(self) -> None:

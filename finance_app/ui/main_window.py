@@ -76,6 +76,10 @@ class MainWindow(QMainWindow):
     voice_command_signal = pyqtSignal(object)
     voice_partial_signal = pyqtSignal(str)
     voice_diagnostic_signal = pyqtSignal(object)
+    # Used to marshal pairing confirmation from background network threads to the
+    # main thread via a guaranteed-queued Qt signal path, avoiding any direct
+    # cross-thread dialog/QTimer interaction.
+    _pairing_handshake_signal = pyqtSignal(str, str)
 
     def __init__(self) -> None:
         super().__init__()
@@ -2908,15 +2912,27 @@ class MainWindow(QMainWindow):
         )
         dialog.pairing_cancelled.connect(self._on_device_pairing_cancelled)
         
-        # Wire pairing manager callback to notify dialog
+        # Wire pairing manager callback through a MainWindow-level pyqtSignal so that
+        # background network threads never touch the dialog (which owns a QTimer) directly.
+        # Emitting _pairing_handshake_signal from any thread is safe because the signal
+        # belongs to MainWindow (main thread), guaranteeing a queued connection.
+        self._pairing_handshake_signal.connect(dialog.pairing_verified_signal)
         if pairing_manager is not None:
-            def on_pairing_confirmed(source_id: str, pairing_code: str) -> None:
-                dialog.pairing_verified_signal.emit(source_id, pairing_code)
-            pairing_manager.set_callbacks(on_confirmed=on_pairing_confirmed)
-        
+            pairing_manager.set_callbacks(
+                on_confirmed=lambda src, code: self._pairing_handshake_signal.emit(src, code)
+            )
+
         dialog.exec_()
+
+        # Clean up in the correct order: clear the callback first (stop network
+        # thread from firing), then disconnect the signal so no late emission
+        # can reach the closed dialog.
         if pairing_manager is not None:
             pairing_manager.set_callbacks(on_confirmed=None)
+        try:
+            self._pairing_handshake_signal.disconnect(dialog.pairing_verified_signal)
+        except RuntimeError:
+            pass  # already disconnected or dialog already destroyed
 
     def _on_device_pairing_confirmed(self, source_id: str, pairing_code: str, device: object | None = None) -> None:
         """Handle device pairing confirmed."""
@@ -4546,11 +4562,15 @@ class MainWindow(QMainWindow):
         self.status_bar.showMessage("Voice listener started.", 3000)
 
     def _handle_voice_status(self, message: str) -> None:
+        if self._is_closing:
+            return
         mode = self._voice_active_surface or "assistant"
         self._set_voice_surface_status_text(mode, f"Voice: {message}")
         self.status_bar.showMessage(message, 2500)
 
     def _handle_voice_error(self, message: str) -> None:
+        if self._is_closing:
+            return
         mode = self._voice_active_surface or "assistant"
         self._set_voice_surface_status_text(mode, "Voice: Error")
         self.status_bar.showMessage(message, 6000)
@@ -4563,6 +4583,8 @@ class MainWindow(QMainWindow):
         self._set_voice_surface_last_command_text(mode, "Last voice command: (error - see output)")
 
     def _handle_voice_wake(self, source_id: str) -> None:
+        if self._is_closing:
+            return
         mode = self._voice_active_surface or "assistant"
         if mode == "assistant":
             self.chat_log.append(f"<i>Wake detected from {html.escape(source_id)}. Listening...</i>")
@@ -4573,6 +4595,8 @@ class MainWindow(QMainWindow):
         self._set_voice_surface_partial_text(mode, "Live transcript: (listening)")
 
     def _handle_voice_partial(self, partial_text: str) -> None:
+        if self._is_closing:
+            return
         mode = self._voice_active_surface or "assistant"
         text = partial_text.strip()
         if not text:
@@ -4581,6 +4605,8 @@ class MainWindow(QMainWindow):
         self._set_voice_surface_partial_text(mode, f"Live transcript: {text}")
 
     def _handle_voice_diagnostic(self, payload: object) -> None:
+        if self._is_closing:
+            return
         if not isinstance(payload, dict):
             return
 
@@ -4670,6 +4696,8 @@ class MainWindow(QMainWindow):
             devices_list_widget.addItem(display_text)
 
     def _handle_voice_command(self, payload: object) -> None:
+        if self._is_closing:
+            return
         command_event: VoiceCommandEvent | None = payload if isinstance(payload, VoiceCommandEvent) else None
         command_text = command_event.text if command_event is not None else str(payload or "")
         if not command_text.strip():
