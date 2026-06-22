@@ -288,7 +288,7 @@ class VoiceCoordinator:
                     on_audio_chunk=self._handle_remote_audio_chunk,
                     on_status=self._emit_status,
                     on_error=self._handle_stream_error,
-                    on_diagnostic=self._emit_diagnostic,
+                    on_diagnostic=self._handle_remote_stream_diagnostic,
                 )
             except Exception as exc:
                 self._handle_stream_error(f"Remote audio server failed to start: {exc}")
@@ -662,6 +662,53 @@ class VoiceCoordinator:
             self._last_partial_preview = ""
             self._awaiting_continuation = False
             self._continuation_deadline = 0.0
+
+    def _handle_remote_stream_diagnostic(self, payload: dict[str, Any]) -> None:
+        self._emit_diagnostic(payload)
+
+        if not isinstance(payload, dict):
+            return
+
+        event = str(payload.get("event", "")).strip().lower()
+        if event != "client_disconnected":
+            return
+
+        source_id = str(payload.get("source_id", "")).strip() or self.source_id
+        with self._state_lock:
+            if self.state != VoiceSessionState.CAPTURING:
+                return
+            if source_id != self._active_source_id:
+                return
+            # Treat sender-side stream close (usually endpoint silence) as an
+            # utterance boundary and dispatch immediately.
+            self.state = VoiceSessionState.DECODING
+            utterance_audio = b"".join(self._capture_chunks)
+            self._capture_chunks.clear()
+            utterance_id = self._utterance_id
+            self._partial_preview_recognizer = None
+            self._last_partial_preview = ""
+            self._awaiting_continuation = False
+            self._continuation_deadline = 0.0
+
+        if not utterance_audio:
+            with self._state_lock:
+                self.state = VoiceSessionState.IDLE
+                self.endpoint.reset()
+            return
+
+        self._emit_status("Remote stream ended. Transcribing command...")
+        self._emit_diagnostic(
+            stage="remote_disconnect_endpoint",
+            source_id=source_id,
+            utterance_id=utterance_id,
+            endpoint_reason="remote_disconnect",
+        )
+        self.telemetry.log(
+            "remote_disconnect_endpoint",
+            source_id=source_id,
+            utterance_id=utterance_id,
+        )
+        self._decode_and_dispatch(utterance_audio, utterance_id)
 
     def _initialize_partial_preview_recognizer_locked(self) -> None:
         if self.wake_mode == "openwakeword":

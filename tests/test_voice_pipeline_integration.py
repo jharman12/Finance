@@ -137,6 +137,25 @@ class VoicePipelineIntegrationTests(unittest.TestCase):
         self.assertEqual(len(remote_start), 1)
         self.assertEqual(remote_start[0].get("source_id"), "remote-node")
 
+    def test_remote_disconnect_finalizes_capture(self) -> None:
+        coordinator = self._build_coordinator()
+        events: list[object] = []
+        coordinator.on_command_event = events.append
+
+        coordinator._handle_remote_audio_chunk("remote-node", b"SPEECH")  # noqa: SLF001
+        coordinator._handle_remote_stream_diagnostic(  # noqa: SLF001
+            {
+                "event": "client_disconnected",
+                "source_id": "remote-node",
+                "reason": "eof",
+            }
+        )
+
+        self.assertEqual(len(events), 1)
+        event = events[0]
+        self.assertEqual(getattr(event, "text", None), "add groceries expense")
+        self.assertEqual(getattr(event, "source_id", None), "remote-node")
+
 
 if __name__ == "__main__":
     unittest.main()

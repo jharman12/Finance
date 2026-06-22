@@ -4570,14 +4570,14 @@ class MainWindow(QMainWindow):
     def _handle_voice_status(self, message: str) -> None:
         if self._is_closing:
             return
-        mode = self._voice_active_surface or "assistant"
+        mode = self._voice_active_surface or "testing"
         self._set_voice_surface_status_text(mode, f"Voice: {message}")
         self.status_bar.showMessage(message, 2500)
 
     def _handle_voice_error(self, message: str) -> None:
         if self._is_closing:
             return
-        mode = self._voice_active_surface or "assistant"
+        mode = self._voice_active_surface or "testing"
         self._set_voice_surface_status_text(mode, "Voice: Error")
         self.status_bar.showMessage(message, 6000)
         if mode == "assistant":
@@ -4591,7 +4591,7 @@ class MainWindow(QMainWindow):
     def _handle_voice_wake(self, source_id: str) -> None:
         if self._is_closing:
             return
-        mode = self._voice_active_surface or "assistant"
+        mode = self._voice_active_surface or ("assistant" if source_id == "local-usb-mic" else "testing")
         if mode == "assistant":
             self.chat_log.append(f"<i>Wake detected from {html.escape(source_id)}. Listening...</i>")
         else:
@@ -4603,7 +4603,7 @@ class MainWindow(QMainWindow):
     def _handle_voice_partial(self, partial_text: str) -> None:
         if self._is_closing:
             return
-        mode = self._voice_active_surface or "assistant"
+        mode = self._voice_active_surface or "testing"
         text = partial_text.strip()
         if not text:
             self._set_voice_surface_partial_text(mode, "Live transcript: (waiting)")
@@ -4649,7 +4649,7 @@ class MainWindow(QMainWindow):
             )
             return
 
-        mode = self._voice_active_surface or "assistant"
+        mode = self._voice_active_surface or "testing"
         widgets = self._voice_ui.get(mode)
         if widgets is None:
             return
@@ -4708,7 +4708,11 @@ class MainWindow(QMainWindow):
         command_text = command_event.text if command_event is not None else str(payload or "")
         if not command_text.strip():
             return
-        mode = self._voice_active_surface or "assistant"
+        mode = self._voice_active_surface or (
+            "assistant"
+            if (command_event is not None and command_event.source_id == "local-usb-mic")
+            else "testing"
+        )
 
         if command_event is not None:
             if self._is_duplicate_voice_command_event(command_event):

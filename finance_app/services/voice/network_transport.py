@@ -117,8 +117,24 @@ class RemoteAudioServer:
                     try:
                         raw = self.rfile.readline()
                     except (ConnectionAbortedError, ConnectionResetError, OSError):
+                        if authenticated and source_id:
+                            outer._emit_diagnostic(
+                                event="client_disconnected",
+                                source_id=source_id,
+                                tls=tls_enabled,
+                                packets=packet_count,
+                                reason="socket_error",
+                            )
                         return
                     if not raw:
+                        if authenticated and source_id:
+                            outer._emit_diagnostic(
+                                event="client_disconnected",
+                                source_id=source_id,
+                                tls=tls_enabled,
+                                packets=packet_count,
+                                reason="eof",
+                            )
                         return
                     if len(raw) > 131072:
                         outer._emit_error("Remote audio message exceeded max line size.")
