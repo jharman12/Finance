@@ -418,45 +418,103 @@ class RemoteWakeStreamSender:
             return
         self._last_pair_probe_at = current
 
+        # Phase 1: capability probe without pairing code. This should be low-noise and
+        # tells us whether the main app has entered active pairing mode yet.
+        connection = self._connect_pair_probe(pairing_code="")
+        if connection is None:
+            return
+
+        pairing_required = connection.pairing_required
+        paired_acknowledged = connection.paired_acknowledged
+        _debug(
+            "Pair probe capability result: "
+            f"paired_acknowledged={paired_acknowledged}, pairing_required={pairing_required}, "
+            f"source_id={self.config.source_id}"
+        )
+        connection.close()
+
+        if paired_acknowledged:
+            self._paired_with_main = True
+            self._waiting_for_pair_notice_logged = False
+            _log(f"Paired with main device at {self.config.host}:{self.config.port}. Waiting for wake phrase.")
+            return
+
+        if not pairing_required:
+            if not self._waiting_for_pair_notice_logged:
+                self._waiting_for_pair_notice_logged = True
+                _log("Waiting for you to select a device and click 'Pair Selected Device' on the main app.")
+            _debug("Pair probe indicates pairing is not active yet on main app.")
+            return
+
+        # Phase 2: active pairing mode is open on main, now send pairing code.
         self._pairing_code = PairingCodeGenerator.generate(self.config.token, self.config.source_id).code
         if self._pairing_code != self._last_announced_pairing_code:
             self._last_announced_pairing_code = self._pairing_code
             _log(f"Pairing code for verification: {self._pairing_code}")
-        allow_untrusted = not self._has_verified_receiver_cert()
-        connection = SecureRemoteAudioConnection(
-            self.config,
-            pairing_code=self._pairing_code,
-            allow_untrusted=allow_untrusted,
-        )
-        try:
-            connection.connect()
-        except Exception as exc:
-            _debug(
-                "Pair probe failed: "
-                f"{exc} (target={self.config.host}:{self.config.port}, tls_name={self.config.tls_server_name or self.config.host})"
-            )
-            connection.close()
+
+        confirm_connection = self._connect_pair_probe(pairing_code=self._pairing_code)
+        if confirm_connection is None:
             return
 
         _debug(
-            "Pair probe result: "
-            f"paired_acknowledged={connection.paired_acknowledged}, pairing_required={connection.pairing_required}, "
-            f"source_id={self.config.source_id}"
+            "Pair probe confirmation result: "
+            f"paired_acknowledged={confirm_connection.paired_acknowledged}, "
+            f"pairing_required={confirm_connection.pairing_required}, source_id={self.config.source_id}"
         )
+        confirm_connection.close()
 
-        connection.close()
-        if not connection.paired_acknowledged:
-            if connection.pairing_required:
-                _log("Pairing request sent. If the code matches the main app, pairing should complete shortly.")
-            elif not self._waiting_for_pair_notice_logged:
-                self._waiting_for_pair_notice_logged = True
-                _log("Waiting for you to click 'Pair New Device' on the main app.")
-            _debug("Pair probe completed but pairing is not confirmed yet. Waiting for 'Pair New Device' on main app.")
+        if not confirm_connection.paired_acknowledged:
+            _log("Pairing request sent, but main app has not confirmed yet. Please keep the pairing dialog open.")
             return
 
         self._paired_with_main = True
         self._waiting_for_pair_notice_logged = False
         _log(f"Paired with main device at {self.config.host}:{self.config.port}. Waiting for wake phrase.")
+
+    def _connect_pair_probe(self, pairing_code: str) -> SecureRemoteAudioConnection | None:
+        allow_untrusted = not self._has_verified_receiver_cert()
+        connection = SecureRemoteAudioConnection(
+            self.config,
+            pairing_code=pairing_code,
+            allow_untrusted=allow_untrusted,
+        )
+        try:
+            connection.connect()
+            return connection
+        except Exception as exc:
+            connection.close()
+            if self._has_verified_receiver_cert() and self._is_cert_verification_error(exc):
+                _log("Stored receiver certificate no longer matches. Refreshing trust for this pairing attempt.")
+                refresh_connection = SecureRemoteAudioConnection(
+                    self.config,
+                    pairing_code=pairing_code,
+                    allow_untrusted=True,
+                )
+                try:
+                    refresh_connection.connect()
+                    return refresh_connection
+                except Exception as retry_exc:
+                    _debug(
+                        "Pair probe failed after trust refresh: "
+                        f"{retry_exc} (target={self.config.host}:{self.config.port}, "
+                        f"tls_name={self.config.tls_server_name or self.config.host})"
+                    )
+                    refresh_connection.close()
+                    return None
+
+            _debug(
+                "Pair probe failed: "
+                f"{exc} (target={self.config.host}:{self.config.port}, tls_name={self.config.tls_server_name or self.config.host})"
+            )
+            return None
+
+    @staticmethod
+    def _is_cert_verification_error(exc: Exception) -> bool:
+        if isinstance(exc, ssl.SSLCertVerificationError):
+            return True
+        if isinstance(exc, ssl.SSLError) and "CERTIFICATE_VERIFY_FAILED" in str(exc).upper():
+            return True
+        return False
 
     def _has_verified_receiver_cert(self) -> bool:
         if not self.config.ca_cert_path:
