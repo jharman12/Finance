@@ -59,6 +59,13 @@ class PairedRemoteDeviceRepository:
 
     def save(self, device: PairedRemoteDevice) -> PairedRemoteDevice:
         """Save or update a paired device."""
+        normalized_port = int(device.port) if isinstance(device.port, int) else 0
+        if normalized_port <= 0:
+            # Remote senders may advertise port=0 because they do not accept inbound
+            # connections. Persist a sentinel positive port to satisfy DB constraints.
+            normalized_port = 1
+        device.port = normalized_port
+
         with self.connection_factory() as conn:
             if device.id is None:
                 cursor = conn.execute(
@@ -71,7 +78,7 @@ class PairedRemoteDeviceRepository:
                         device.source_id,
                         device.device_name,
                         device.host_ip,
-                        device.port,
+                        normalized_port,
                         device.role,
                         device.protocol_version,
                         device.paired_at.isoformat() if isinstance(device.paired_at, datetime) else device.paired_at,
@@ -93,7 +100,7 @@ class PairedRemoteDeviceRepository:
                     (
                         device.device_name,
                         device.host_ip,
-                        device.port,
+                        normalized_port,
                         device.role,
                         device.protocol_version,
                         device.paired_at.isoformat() if isinstance(device.paired_at, datetime) else device.paired_at,

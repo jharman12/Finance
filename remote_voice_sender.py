@@ -368,9 +368,6 @@ class RemoteWakeStreamSender:
                 "Pairing diagnostic: discovered receiver token fingerprint="
                 f"{_token_fingerprint(self.config.token)}"
             )
-        discovered_cert_path = device.properties.get("tls_cert_path", "").strip()
-        if discovered_cert_path:
-            self.config.ca_cert_path = discovered_cert_path
         discovered_tls_server_name = device.properties.get("tls_server_name", "").strip()
         if discovered_tls_server_name:
             self.config.tls_server_name = discovered_tls_server_name
@@ -567,15 +564,47 @@ class RemoteWakeStreamSender:
             for buffered_chunk in self._preroll_buffer:
                 connection.send_audio(buffered_chunk)
         except Exception as exc:
-            connection.close()
-            _log(
-                "Remote audio connection failed: "
-                f"{exc} (target={self.config.host}:{self.config.port}, tls_name={self.config.tls_server_name or self.config.host})"
-            )
-            _log(
-                "Check: main PC app running with remote audio enabled, bind host set for LAN, firewall open on port, "
-                "and TLS cert/server name match."
-            )
+            recovered = False
+            if self._has_verified_receiver_cert() and self._is_cert_verification_error(exc):
+                _log("Stored receiver certificate no longer matches. Refreshing trust and retrying stream connection.")
+                connection.close()
+                refresh_connection = SecureRemoteAudioConnection(
+                    self.config,
+                    pairing_code=self._pairing_code,
+                    allow_untrusted=True,
+                )
+                try:
+                    refresh_connection.connect()
+                    _debug(f"Sending preroll buffer chunks={len(self._preroll_buffer)} after trust refresh")
+                    for buffered_chunk in self._preroll_buffer:
+                        refresh_connection.send_audio(buffered_chunk)
+                    connection = refresh_connection
+                    recovered = True
+                except Exception as retry_exc:
+                    refresh_connection.close()
+                    _log(
+                        "Remote audio connection failed: "
+                        f"{retry_exc} (target={self.config.host}:{self.config.port}, "
+                        f"tls_name={self.config.tls_server_name or self.config.host})"
+                    )
+                    _log(
+                        "Check: main PC app running with remote audio enabled, bind host set for LAN, firewall open on port, "
+                        "and TLS cert/server name match."
+                    )
+            if recovered:
+                pass
+            else:
+                connection.close()
+                _log(
+                    "Remote audio connection failed: "
+                    f"{exc} (target={self.config.host}:{self.config.port}, tls_name={self.config.tls_server_name or self.config.host})"
+                )
+                _log(
+                    "Check: main PC app running with remote audio enabled, bind host set for LAN, firewall open on port, "
+                    "and TLS cert/server name match."
+                )
+                self._cooldown_until = time.monotonic() + self.config.cooldown_seconds
+                return
             self._cooldown_until = time.monotonic() + self.config.cooldown_seconds
             return
 

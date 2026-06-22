@@ -2893,8 +2893,9 @@ class MainWindow(QMainWindow):
             return
 
         token_fp = hashlib.sha256(auth_token.encode("utf-8")).hexdigest()[:6]
-        if self.voice_output_box is not None:
-            self.voice_output_box.append(f"[Pairing diagnostic] Receiver token fingerprint={token_fp}")
+        output_box = getattr(self, "voice_output_box", None)
+        if output_box is not None:
+            output_box.append(f"[Pairing diagnostic] Receiver token fingerprint={token_fp}")
 
         dialog = DevicePairingDialog(auth_token, pairing_manager=pairing_manager, parent=self)
         dialog.pairing_confirmed.connect(
@@ -2937,6 +2938,13 @@ class MainWindow(QMainWindow):
                 is_active=True,
             )
             self.app_controller.save_paired_remote_device(paired_device)
+
+            service_name = str(getattr(device, "service_name", "") or source_id)
+            self._discovered_voice_devices[service_name] = {
+                "service_name": f"{device_name} ({source_id[:8]}...)",
+                "state": "paired",
+            }
+            self._update_discovered_devices_list()
 
         QMessageBox.information(
             self,
