@@ -4585,6 +4585,26 @@ class MainWindow(QMainWindow):
                 self._update_discovered_devices_list()
             return
 
+        if event_type == "pairing_evaluated":
+            source_id = str(payload.get("source_id", "")).strip() or "(unknown)"
+            pairing_verified = bool(payload.get("pairing_verified", False))
+            pairing_required = bool(payload.get("pairing_required", False))
+            self.status_bar.showMessage(
+                f"Pairing check: source={source_id}, verified={pairing_verified}, required={pairing_required}",
+                5000,
+            )
+            return
+
+        if event_type == "hello_ack_sent":
+            source_id = str(payload.get("source_id", "")).strip() or "(unknown)"
+            paired = bool(payload.get("paired", False))
+            pairing_required = bool(payload.get("pairing_required", False))
+            self.status_bar.showMessage(
+                f"Pairing ack sent: source={source_id}, paired={paired}, required={pairing_required}",
+                5000,
+            )
+            return
+
         mode = self._voice_active_surface or "assistant"
         widgets = self._voice_ui.get(mode)
         if widgets is None:

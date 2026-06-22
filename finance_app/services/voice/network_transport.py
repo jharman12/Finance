@@ -162,6 +162,10 @@ class RemoteAudioServer:
                         # Check pairing code if present
                         pairing_verified = False
                         pairing_code = str(msg.get("pairing_code", "")).strip()
+                        outer._debug_log(
+                            "Hello received "
+                            f"source_id={source_id}, pairing_code_present={bool(pairing_code)}"
+                        )
                         if pairing_code and outer.pairing_manager is not None:
                             if hasattr(outer.pairing_manager, 'verify_pairing_code'):
                                 pairing_verified = outer.pairing_manager.verify_pairing_code(source_id, pairing_code)
@@ -181,6 +185,10 @@ class RemoteAudioServer:
                             pairing_verified=pairing_verified,
                             pairing_required=pairing_required,
                         )
+                        outer._debug_log(
+                            "Sending hello_ack "
+                            f"source_id={source_id}, paired={pairing_verified}, pairing_required={pairing_required}"
+                        )
 
                         try:
                             self.wfile.write(
@@ -199,6 +207,13 @@ class RemoteAudioServer:
                             self.wfile.flush()
                         except Exception:
                             return
+
+                        outer._emit_diagnostic(
+                            event="hello_ack_sent",
+                            source_id=source_id,
+                            paired=pairing_verified,
+                            pairing_required=pairing_required,
+                        )
                         continue
 
                     if msg_type != "audio":

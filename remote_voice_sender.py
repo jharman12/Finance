@@ -136,14 +136,24 @@ class SecureRemoteAudioConnection:
                     ack_raw += part
                 if ack_raw:
                     line = ack_raw.split(b"\n", 1)[0].decode("utf-8", errors="ignore").strip()
+                    _debug(f"hello_ack raw line: {line}")
                     if line:
                         ack_msg = json.loads(line)
                         if str(ack_msg.get("type", "")).strip().lower() == "hello_ack":
                             self.paired_acknowledged = bool(ack_msg.get("paired", False))
                             self.pairing_required = bool(ack_msg.get("pairing_required", False))
+                            _debug(
+                                "hello_ack parsed: "
+                                f"paired={self.paired_acknowledged}, pairing_required={self.pairing_required}"
+                            )
+                        else:
+                            _debug(f"Unexpected ack message type: {ack_msg.get('type')}")
+                else:
+                    _debug("No hello_ack payload received before socket closed.")
             except Exception:
                 self.paired_acknowledged = False
                 self.pairing_required = False
+                _debug("Failed to read hello_ack; defaulting paired=false.")
             finally:
                 try:
                     self._socket.settimeout(None)
@@ -427,6 +437,12 @@ class RemoteWakeStreamSender:
             )
             connection.close()
             return
+
+        _debug(
+            "Pair probe result: "
+            f"paired_acknowledged={connection.paired_acknowledged}, pairing_required={connection.pairing_required}, "
+            f"source_id={self.config.source_id}"
+        )
 
         connection.close()
         if not connection.paired_acknowledged:
