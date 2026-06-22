@@ -29,7 +29,7 @@ from finance_app.services.voice.pairing_manager import RemoteVoicePairingManager
 class DevicePairingDialog(QDialog):
     """Dialog for discovering and pairing with remote voice senders."""
 
-    pairing_confirmed = pyqtSignal(str, str)  # Signals (source_id, pairing_code)
+    pairing_confirmed = pyqtSignal(str, str, object)  # Signals (source_id, pairing_code, device)
     pairing_cancelled = pyqtSignal()
     device_discovered_signal = pyqtSignal(object)
     diagnostic_signal = pyqtSignal(object)
@@ -242,8 +242,12 @@ class DevicePairingDialog(QDialog):
         if self.pairing_manager is not None:
             self.pairing_manager.cancel_pairing()
         self._pair_button.setText("Paired")
-        self.pairing_confirmed.emit(source_id, pairing_code)
+        self.pairing_confirmed.emit(source_id, pairing_code, self.get_discovered_device(source_id))
         self.accept()
+        # Break all reference cycles so CPython's refcount (not cyclic GC) can
+        # free the dialog immediately on the main thread when exec_() returns.
+        # (accept() hides the dialog but does NOT call closeEvent.)
+        self._break_signal_cycles()
 
     def _on_cancel_clicked(self) -> None:
         """Handle cancel button."""
@@ -254,7 +258,12 @@ class DevicePairingDialog(QDialog):
                 pass
             self._discovery_browser = None
 
-        self._pairing_timeout_timer.stop()
+        try:
+            self._pairing_timeout_timer.stop()
+            self._pairing_timeout_timer.timeout.disconnect()
+        except RuntimeError:
+            pass
+        self._break_signal_cycles()
         self.pairing_cancelled.emit()
         self.reject()
 
@@ -274,7 +283,30 @@ class DevicePairingDialog(QDialog):
             self._pairing_timeout_timer.timeout.disconnect()
         except RuntimeError:
             pass
+        self._break_signal_cycles()
         super().closeEvent(event)
+
+    def _break_signal_cycles(self) -> None:
+        """Disconnect all outbound signals to eliminate reference cycles.
+
+        The pairing_confirmed signal has a lambda connected that captures
+        ``self`` (the dialog).  This creates a cycle::
+
+            dialog → pairing_confirmed → connection → lambda → dialog
+
+        Python’s cyclic GC can collect this cycle on any thread, including
+        background socket-handler threads, causing QTimer destruction there
+        and the crash::
+
+            QObject::~QObject: Timers cannot be stopped from another thread
+        """
+        for sig in (self.pairing_confirmed, self.pairing_cancelled,
+                    self.pairing_verified_signal, self.device_discovered_signal,
+                    self.diagnostic_signal):
+            try:
+                sig.disconnect()
+            except (RuntimeError, TypeError):
+                pass
 
     def confirm_pairing(self) -> None:
         """Confirm pairing (called when connection from sender received)."""
@@ -282,5 +314,5 @@ class DevicePairingDialog(QDialog):
         if self._selected_device is not None:
             source_id = self._selected_device.source_id
             pairing_code = PairingCodeGenerator.generate(self.auth_token, source_id).code
-            self.pairing_confirmed.emit(source_id, pairing_code)
+            self.pairing_confirmed.emit(source_id, pairing_code, self._selected_device)
             self.accept()

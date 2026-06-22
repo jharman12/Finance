@@ -1209,7 +1209,7 @@ class FinanceRepository:
         return self._analytics_repository.snapshot_for_month(year, month)
 
     def monthly_history(self, reference_year: int, reference_month: int, months: int = 6) -> list[tuple[int, int, float, float, float]]:
-        return self._analytics_repository.monthly_history(reference_year, reference_month, months)
+        return self._analytics_repository.monthly_history(reference_year, reference_month, months=months)
 
     def personal_position_history(
         self,

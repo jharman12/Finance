@@ -2903,13 +2903,7 @@ class MainWindow(QMainWindow):
             output_box.append(f"[Pairing diagnostic] Receiver token fingerprint={token_fp}")
 
         dialog = DevicePairingDialog(auth_token, pairing_manager=pairing_manager, parent=self)
-        dialog.pairing_confirmed.connect(
-            lambda source_id, pairing_code: self._on_device_pairing_confirmed(
-                source_id,
-                pairing_code,
-                dialog.get_discovered_device(source_id),
-            )
-        )
+        dialog.pairing_confirmed.connect(self._on_device_pairing_confirmed)
         dialog.pairing_cancelled.connect(self._on_device_pairing_cancelled)
         
         # Wire pairing manager callback through a MainWindow-level pyqtSignal so that
@@ -2924,15 +2918,27 @@ class MainWindow(QMainWindow):
 
         dialog.exec_()
 
-        # Clean up in the correct order: clear the callback first (stop network
-        # thread from firing), then disconnect the signal so no late emission
-        # can reach the closed dialog.
+        # ---- Clean up in the correct order --------------------------------
+        # 1. Clear the network-thread callback FIRST so no background thread
+        #    can fire _pairing_handshake_signal after this point.
         if pairing_manager is not None:
             pairing_manager.set_callbacks(on_confirmed=None)
+
+        # 2. Disconnect the MainWindow → dialog signal bridge.
         try:
             self._pairing_handshake_signal.disconnect(dialog.pairing_verified_signal)
         except RuntimeError:
-            pass  # already disconnected or dialog already destroyed
+            pass
+
+        # 3. Disconnect dialog signals defensively so no late signal delivery can
+        #    target handlers after dialog teardown.
+        for sig in (dialog.pairing_confirmed, dialog.pairing_cancelled,
+                    dialog.pairing_verified_signal, dialog.device_discovered_signal,
+                    dialog.diagnostic_signal):
+            try:
+                sig.disconnect()
+            except (RuntimeError, TypeError):
+                pass
 
     def _on_device_pairing_confirmed(self, source_id: str, pairing_code: str, device: object | None = None) -> None:
         """Handle device pairing confirmed."""
