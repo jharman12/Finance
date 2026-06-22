@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import threading
+import time
 from dataclasses import dataclass
 from typing import Callable
 
@@ -13,7 +14,19 @@ class PairingState:
 
     source_id: str
     expected_pairing_code: str
+    pairing_session_id: str
+    session_created_at: float
+    session_timeout_seconds: float = 60.0  # 30-60s window as per Phase 2 spec
     confirmed: bool = False
+
+    def is_session_expired(self) -> bool:
+        """Check if pairing session has expired."""
+        elapsed = time.time() - self.session_created_at
+        return elapsed > self.session_timeout_seconds
+
+    def get_session_age_seconds(self) -> float:
+        """Get age of pairing session in seconds."""
+        return time.time() - self.session_created_at
 
 
 class RemoteVoicePairingManager:
@@ -29,10 +42,21 @@ class RemoteVoicePairingManager:
         with self._lock:
             self._on_pairing_confirmed = on_confirmed
 
-    def start_pairing(self, source_id: str, expected_code: str) -> None:
-        """Start waiting for a pairing connection."""
+    def start_pairing(self, source_id: str, expected_code: str, pairing_session_id: str = "") -> None:
+        """Start waiting for a pairing connection.
+        
+        Args:
+            source_id: ID of the remote device to pair
+            expected_code: Expected pairing code for verification
+            pairing_session_id: Unique session ID for this pairing attempt (required for Phase 2)
+        """
         with self._lock:
-            self._pairing_state = PairingState(source_id=source_id, expected_pairing_code=expected_code)
+            self._pairing_state = PairingState(
+                source_id=source_id,
+                expected_pairing_code=expected_code,
+                pairing_session_id=pairing_session_id,
+                session_created_at=time.time(),
+            )
 
     def cancel_pairing(self) -> None:
         """Cancel the active pairing session."""
@@ -44,19 +68,27 @@ class RemoteVoicePairingManager:
         with self._lock:
             return self._pairing_state is not None
 
-    def verify_pairing_code(self, source_id: str, pairing_code: str) -> bool:
+    def verify_pairing_code(self, source_id: str, pairing_code: str, pairing_session_id: str = "") -> bool:
         """
-        Verify incoming pairing code.
+        Verify incoming pairing code and session ID.
 
-        Returns True if pairing is confirmed, False otherwise.
+        Returns True if pairing is confirmed and session is valid, False otherwise.
         """
         callback: Callable[[str, str], None] | None = None
         with self._lock:
             if self._pairing_state is None:
                 return False
 
+            # Check if session has expired
+            if self._pairing_state.is_session_expired():
+                return False
+
             # Check if source matches
             if self._pairing_state.source_id != source_id:
+                return False
+
+            # Check if session ID matches (Phase 2 requirement)
+            if pairing_session_id and self._pairing_state.pairing_session_id != pairing_session_id:
                 return False
 
             # Check if code matches

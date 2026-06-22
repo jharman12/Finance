@@ -43,9 +43,11 @@ class RemoteAudioServer:
     """Authenticated LAN audio ingest server.
 
     Protocol: newline-delimited JSON messages.
-    - hello: {"type":"hello","token":"...","source_id":"node-1"}
+    - hello: {"type":"hello","token":"...","source_id":"node-1","pairing_code":"...","pairing_session_id":"..."}
     - audio: {"type":"audio","seq_no":1,"audio_b64":"...","sent_at_ms":...}
     - ping:  {"type":"ping"}
+    
+    Phase 2: pairing_session_id and pairing_code are optional but recommended for secure pairing.
     """
 
     def __init__(
@@ -183,17 +185,40 @@ class RemoteAudioServer:
                         outer._emit_diagnostic(event="client_authenticated", source_id=source_id, tls=tls_enabled)
                         outer._debug_log(f"Client authenticated source_id={source_id}, tls={tls_enabled}")
 
-                        # Check pairing code if present
+                        # Check pairing code if present (Phase 2: include session_id)
                         pairing_verified = False
                         pairing_code = str(msg.get("pairing_code", "")).strip()
+                        pairing_session_id = str(msg.get("pairing_session_id", "")).strip()  # Phase 2
+                        session_validation_reason = ""  # Phase 2: diagnostic reason
                         outer._debug_log(
                             "Hello received "
-                            f"source_id={source_id}, pairing_code_present={bool(pairing_code)}"
+                            f"source_id={source_id}, pairing_code_present={bool(pairing_code)}, "
+                            f"session_id_present={bool(pairing_session_id)}"
                         )
                         if pairing_code and outer.pairing_manager is not None:
                             if hasattr(outer.pairing_manager, 'verify_pairing_code'):
-                                pairing_verified = outer.pairing_manager.verify_pairing_code(source_id, pairing_code)
-                                outer._debug_log(f"Pairing code verification for {source_id}: {pairing_verified}")
+                                # Phase 2: Pass session_id to verify_pairing_code for session validation
+                                pairing_verified = outer.pairing_manager.verify_pairing_code(
+                                    source_id, pairing_code, pairing_session_id
+                                )
+                                
+                                # Phase 2: Determine rejection reason for diagnostics
+                                if not pairing_verified:
+                                    state = getattr(outer.pairing_manager, '_pairing_state', None)
+                                    if state is None:
+                                        session_validation_reason = "no_pairing_session"
+                                    elif state.source_id != source_id:
+                                        session_validation_reason = "source_id_mismatch"
+                                    elif state.is_session_expired():
+                                        session_validation_reason = "session_expired"
+                                    elif pairing_session_id and state.pairing_session_id != pairing_session_id:
+                                        session_validation_reason = "session_id_mismatch"
+                                    elif state.expected_pairing_code != pairing_code:
+                                        session_validation_reason = "pairing_code_mismatch"
+                                    else:
+                                        session_validation_reason = "unknown"
+                                
+                                outer._debug_log(f"Pairing code verification for {source_id}: {pairing_verified} ({session_validation_reason})")
 
                         pairing_required = False
                         if outer.pairing_manager is not None and hasattr(outer.pairing_manager, "is_pairing"):
@@ -206,8 +231,10 @@ class RemoteAudioServer:
                             event="pairing_evaluated",
                             source_id=source_id,
                             pairing_code_present=bool(pairing_code),
+                            pairing_session_id_present=bool(pairing_session_id),  # Phase 2
                             pairing_verified=pairing_verified,
                             pairing_required=pairing_required,
+                            session_validation_reason=session_validation_reason or "none",  # Phase 2
                             server_token_fingerprint=_token_fingerprint(outer.auth_token),
                             received_token_fingerprint=_token_fingerprint(token),
                         )

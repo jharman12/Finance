@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import socket
+import uuid
 from typing import Any
 
 from PyQt5.QtCore import QTimer, Qt, pyqtSignal
@@ -43,6 +44,7 @@ class DevicePairingDialog(QDialog):
         self._discovered_devices: dict[str, RemoteVoiceDiscoveryDevice] = {}
         self._local_hosts = self._collect_local_hosts()
         self._discovery_browser: RemoteVoiceDiscoveryBrowser | None = None
+        self._pairing_session_id = ""  # Phase 2: Unique session ID for current pairing attempt
         self._pairing_timeout_timer = QTimer()
         self._pairing_timeout_timer.setSingleShot(True)
         self._pairing_timeout_timer.timeout.connect(self._on_pairing_timeout)
@@ -175,8 +177,13 @@ class DevicePairingDialog(QDialog):
                 pass
             self._discovery_browser = None
 
-        # Show pairing code
-        pairing_code = PairingCodeGenerator.generate(self.auth_token, source_id).code
+        # Phase 2: Generate unique session ID for this pairing attempt
+        self._pairing_session_id = str(uuid.uuid4())
+
+        # Generate pairing code with session ID (Phase 2)
+        pairing_code = PairingCodeGenerator.generate(
+            self.auth_token, source_id, self._pairing_session_id
+        ).code
         self._show_pairing_code(device, pairing_code)
 
     def _show_pairing_code(self, device: RemoteVoiceDiscoveryDevice, pairing_code: str) -> None:
@@ -185,9 +192,11 @@ class DevicePairingDialog(QDialog):
         self._pair_button.setEnabled(False)
         self._pair_button.setText("Pairing In Progress")
 
-        # Register with pairing manager
+        # Register with pairing manager (Phase 2: include session_id)
         if self.pairing_manager is not None:
-            self.pairing_manager.start_pairing(device.source_id, pairing_code)
+            self.pairing_manager.start_pairing(
+                device.source_id, pairing_code, self._pairing_session_id
+            )
 
         # Clear and show pairing info
         self._device_list.clear()
@@ -206,11 +215,15 @@ class DevicePairingDialog(QDialog):
 
         self._discovery_label.setText("Waiting for device to connect...")
 
-        # Set timeout for pairing (30 seconds)
-        self._pairing_timeout_timer.start(30000)
+        # Set timeout for pairing (30-60 seconds per Phase 2 spec)
+        self._pairing_timeout_timer.start(60000)
 
     def get_discovered_device(self, source_id: str) -> RemoteVoiceDiscoveryDevice | None:
         return self._discovered_devices.get(source_id)
+
+    def get_pairing_session_id(self) -> str:
+        """Get the current pairing session ID (Phase 2)."""
+        return self._pairing_session_id
 
     def _on_pairing_timeout(self) -> None:
         """Handle pairing timeout."""

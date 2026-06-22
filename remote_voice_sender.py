@@ -88,12 +88,20 @@ class SenderConfig:
     endpoint_silence_ms: int
     endpoint_max_utterance_ms: int
     energy_threshold: float
+    pairing_session_id: str | None = None  # Phase 2: Optional session ID for pairing validation
 
 
 class SecureRemoteAudioConnection:
-    def __init__(self, config: SenderConfig, pairing_code: str | None = None, allow_untrusted: bool = False) -> None:
+    def __init__(
+        self,
+        config: SenderConfig,
+        pairing_code: str | None = None,
+        pairing_session_id: str | None = None,  # Phase 2
+        allow_untrusted: bool = False,
+    ) -> None:
         self.config = config
         self.pairing_code = pairing_code or ""
+        self.pairing_session_id = pairing_session_id or (config.pairing_session_id or "")  # Phase 2
         self.allow_untrusted = allow_untrusted
         self.paired_acknowledged = False
         self.pairing_required = False
@@ -132,14 +140,16 @@ class SecureRemoteAudioConnection:
             if self.allow_untrusted:
                 self._persist_peer_certificate()
             _debug("TLS handshake complete. Sending hello message.")
-            self._send_json(
-                {
-                    "type": "hello",
-                    "token": self.config.token,
-                    "source_id": self.config.source_id,
-                    "pairing_code": self.pairing_code,
-                }
-            )
+            hello_msg = {
+                "type": "hello",
+                "token": self.config.token,
+                "source_id": self.config.source_id,
+                "pairing_code": self.pairing_code,
+            }
+            # Phase 2: Include session_id if available
+            if self.pairing_session_id:
+                hello_msg["pairing_session_id"] = self.pairing_session_id
+            self._send_json(hello_msg)
             try:
                 self._socket.settimeout(4.0)
                 ack_raw = b""
