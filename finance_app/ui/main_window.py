@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 import csv
+import hashlib
 from collections import deque
 from datetime import date, datetime
 import calendar
@@ -2854,20 +2855,6 @@ class MainWindow(QMainWindow):
     def _on_pair_new_device_clicked(self) -> None:
         """Handle 'Pair New Device' button clicked."""
         from finance_app.ui.device_pairing_dialog import DevicePairingDialog
-        from finance_app.services.voice.remote_config import RemoteVoiceConfigManager
-
-        try:
-            config_manager = RemoteVoiceConfigManager()
-            credentials = config_manager.get_credentials()
-            auth_token = credentials.auth_token
-        except Exception as exc:
-            # Log error and show message
-            QMessageBox.warning(
-                self,
-                "Error",
-                f"Failed to get authentication token: {exc}"
-            )
-            return
 
         pairing_manager = None
         if self.voice_coordinator and hasattr(self.voice_coordinator, 'pairing_manager'):
@@ -2892,6 +2879,22 @@ class MainWindow(QMainWindow):
                 f"Remote receiver ready on port {self.voice_coordinator.remote_stream.bound_port}.",
                 5000,
             )
+
+        auth_token = ""
+        if self.voice_coordinator is not None and self.voice_coordinator.remote_stream is not None:
+            auth_token = str(getattr(self.voice_coordinator.remote_stream.server, "auth_token", "")).strip()
+
+        if len(auth_token) < 16:
+            QMessageBox.warning(
+                self,
+                "Remote Receiver Not Ready",
+                "Pairing token is unavailable from the active receiver. Restart remote voice and try again.",
+            )
+            return
+
+        token_fp = hashlib.sha256(auth_token.encode("utf-8")).hexdigest()[:6]
+        if self.voice_output_box is not None:
+            self.voice_output_box.append(f"[Pairing diagnostic] Receiver token fingerprint={token_fp}")
 
         dialog = DevicePairingDialog(auth_token, pairing_manager=pairing_manager, parent=self)
         dialog.pairing_confirmed.connect(

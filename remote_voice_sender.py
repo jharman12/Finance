@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import hashlib
 import json
 import os
 import queue
@@ -57,6 +58,13 @@ def _debug(message: str) -> None:
     _log(f"DEBUG: {message}")
 
 
+def _token_fingerprint(token: str) -> str:
+    cleaned = token.strip()
+    if not cleaned:
+        return ""
+    return hashlib.sha256(cleaned.encode("utf-8")).hexdigest()[:6]
+
+
 @dataclass(slots=True)
 class SenderConfig:
     host: str
@@ -89,6 +97,7 @@ class SecureRemoteAudioConnection:
         self.allow_untrusted = allow_untrusted
         self.paired_acknowledged = False
         self.pairing_required = False
+        self.server_token_fingerprint = ""
         self._socket: ssl.SSLSocket | None = None
         self._seq_no = 0
 
@@ -142,9 +151,11 @@ class SecureRemoteAudioConnection:
                         if str(ack_msg.get("type", "")).strip().lower() == "hello_ack":
                             self.paired_acknowledged = bool(ack_msg.get("paired", False))
                             self.pairing_required = bool(ack_msg.get("pairing_required", False))
+                            self.server_token_fingerprint = str(ack_msg.get("server_token_fingerprint", "")).strip()
                             _debug(
                                 "hello_ack parsed: "
-                                f"paired={self.paired_acknowledged}, pairing_required={self.pairing_required}"
+                                f"paired={self.paired_acknowledged}, pairing_required={self.pairing_required}, "
+                                f"server_token_fp={self.server_token_fingerprint or '(none)'}"
                             )
                         else:
                             _debug(f"Unexpected ack message type: {ack_msg.get('type')}")
@@ -353,6 +364,10 @@ class RemoteWakeStreamSender:
         discovered_token = device.properties.get("auth_token", "").strip()
         if discovered_token:
             self.config.token = discovered_token
+            _debug(
+                "Pairing diagnostic: discovered receiver token fingerprint="
+                f"{_token_fingerprint(self.config.token)}"
+            )
         discovered_cert_path = device.properties.get("tls_cert_path", "").strip()
         if discovered_cert_path:
             self.config.ca_cert_path = discovered_cert_path
@@ -453,6 +468,10 @@ class RemoteWakeStreamSender:
         # Phase 2: active pairing mode is open on main, now send pairing code.
         if not self._pairing_code:
             self._pairing_code = PairingCodeGenerator.generate(self.config.token, self.config.source_id).code
+            _debug(
+                "Pairing diagnostic: local token fingerprint="
+                f"{_token_fingerprint(self.config.token)} source_id={self.config.source_id}"
+            )
         if self._pairing_code != self._last_announced_pairing_code:
             self._last_announced_pairing_code = self._pairing_code
             _log(f"Pairing code for verification: {self._pairing_code}")

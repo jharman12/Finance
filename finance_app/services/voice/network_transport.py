@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import hmac
 import json
 import os
@@ -29,6 +30,13 @@ class RemoteAudioPacket:
 class _ThreadingTcpServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
     allow_reuse_address = True
     daemon_threads = True
+
+
+def _token_fingerprint(token: str) -> str:
+    cleaned = token.strip()
+    if not cleaned:
+        return ""
+    return hashlib.sha256(cleaned.encode("utf-8")).hexdigest()[:6]
 
 
 class RemoteAudioServer:
@@ -184,6 +192,8 @@ class RemoteAudioServer:
                             pairing_code_present=bool(pairing_code),
                             pairing_verified=pairing_verified,
                             pairing_required=pairing_required,
+                            server_token_fingerprint=_token_fingerprint(outer.auth_token),
+                            received_token_fingerprint=_token_fingerprint(token),
                         )
                         outer._debug_log(
                             "Sending hello_ack "
@@ -198,6 +208,7 @@ class RemoteAudioServer:
                                             "type": "hello_ack",
                                             "paired": pairing_verified,
                                             "pairing_required": pairing_required,
+                                            "server_token_fingerprint": _token_fingerprint(outer.auth_token),
                                         },
                                         ensure_ascii=True,
                                     )
