@@ -2,6 +2,7 @@
 
 import time
 import unittest
+import ssl
 from unittest.mock import MagicMock, patch
 
 from finance_app.services.voice.persistent_connection import (
@@ -256,6 +257,23 @@ class TestPersistentRemoteConnection(unittest.TestCase):
         self.assertEqual(conn.on_connected, on_connected)
         self.assertEqual(conn.on_disconnected, on_disconnected)
         self.assertEqual(conn.on_error, on_error)
+
+    def test_connect_retries_with_trust_refresh_on_cert_failure(self) -> None:
+        """Test that TLS verification failures retry with trust refresh."""
+        conn = PersistentRemoteConnection(
+            host="localhost",
+            port=9999,
+            token="test-token-1234567890",
+            source_id="test-device",
+            allow_untrusted=False,
+        )
+
+        cert_error = ssl.SSLCertVerificationError("certificate verify failed")
+        with patch.object(conn, "_connect_with_allow_untrusted", side_effect=[cert_error, True]) as mock_connect:
+            result = conn._connect()
+
+        self.assertTrue(result)
+        self.assertEqual(mock_connect.call_count, 2)
 
 
 class TestRemoteWakeStreamSenderPersistentWiring(unittest.TestCase):

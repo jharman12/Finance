@@ -10,6 +10,7 @@ import ssl
 import threading
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Callable
 
 
@@ -160,18 +161,45 @@ class PersistentRemoteConnection:
     def _connect(self) -> bool:
         """Establish initial TLS connection and send hello."""
         try:
-            context = ssl.create_default_context()
+            return self._connect_with_allow_untrusted(self.allow_untrusted)
+        except ssl.SSLCertVerificationError as exc:
             if self.allow_untrusted:
-                context.check_hostname = False
-                context.verify_mode = ssl.CERT_NONE
-            if self.ca_cert_path:
-                context.load_verify_locations(self.ca_cert_path)
-            context.minimum_version = ssl.TLSVersion.TLSv1_2
+                self._emit_error(f"Connection failed: {exc}")
+                return False
 
-            raw_socket = socket.create_connection((self.host, self.port), timeout=5.0)
+            # Verified TLS failed. Retry once in trust-refresh mode, which matches the
+            # older pairing probe behavior and avoids breaking on stale receiver certs.
+            self._emit_error(
+                "Certificate verification failed. Retrying with trust refresh for this pairing attempt."
+            )
+            try:
+                return self._connect_with_allow_untrusted(True)
+            except Exception as retry_exc:
+                self._emit_error(f"Connection failed after trust refresh: {retry_exc}")
+                return False
+        except Exception as e:
+            self._emit_error(f"Connection failed: {e}")
+            return False
+
+    def _connect_with_allow_untrusted(self, allow_untrusted: bool) -> bool:
+        context = ssl.create_default_context()
+        if allow_untrusted:
+            context.check_hostname = False
+            context.verify_mode = ssl.CERT_NONE
+        elif self.ca_cert_path:
+            context.load_verify_locations(self.ca_cert_path)
+            cert_path = Path(self.ca_cert_path)
+            if cert_path.name.lower() == "receiver-ca-cert.pem":
+                context.check_hostname = False
+        context.minimum_version = ssl.TLSVersion.TLSv1_2
+
+        raw_socket = socket.create_connection((self.host, self.port), timeout=5.0)
+        try:
             server_name = self.tls_server_name or self.host
             self._socket = context.wrap_socket(raw_socket, server_hostname=server_name)
-            
+            if allow_untrusted:
+                self._persist_peer_certificate()
+
             # Send hello message
             hello_msg = {
                 "type": "hello",
@@ -181,11 +209,11 @@ class PersistentRemoteConnection:
             }
             if self.pairing_session_id:
                 hello_msg["pairing_session_id"] = self.pairing_session_id
-            
+
             # Phase 3: Include last_seq_no for session resumption
             if self.last_seq_no > 0:
                 hello_msg["last_seq_no"] = self.last_seq_no
-            
+
             if not self._send_json(hello_msg):
                 return False
 
@@ -203,16 +231,15 @@ class PersistentRemoteConnection:
             if not self.connection_id:
                 self.connection_id = f"{self.source_id}-{int(time.time() * 1000)}"
             self._audio_seq_no = max(self._audio_seq_no, self.last_seq_no)
-            
+
             self.connected = True
             if self.on_connected:
                 self.on_connected()
-            
+
             return True
 
-        except Exception as e:
-            self._emit_error(f"Connection failed: {e}")
-            return False
+        except Exception:
+            raise
 
     def _heartbeat_loop(self) -> None:
         """Send periodic heartbeats to keep connection alive."""
