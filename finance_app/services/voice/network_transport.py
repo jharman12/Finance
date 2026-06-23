@@ -500,12 +500,27 @@ class RemoteAudioServer:
             self._emit_error(f"Remote audio server failed: {exc}")
 
     def _build_discovery_properties(self, advertised_tls_server_name: str) -> dict[str, str]:
-        """Build discovery metadata without exposing secrets (Phase 4)."""
+        """Build discovery metadata.
+
+        Phase 4 hardening: secrets are excluded unless legacy bootstrap is
+        explicitly enabled for compatibility with pre-mTLS pairing flow.
+        """
         endpoint = f"{advertised_tls_server_name}:{self.bound_port}"
-        return {
+        properties = {
             "tls_server_name": advertised_tls_server_name,
             "endpoint": endpoint,
         }
+        bootstrap_enabled = os.getenv("FINANCE_APP_REMOTE_MDNS_TOKEN_BOOTSTRAP", "1").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        if bootstrap_enabled:
+            # Compatibility mode: allows existing remote senders to acquire the
+            # shared token for initial pairing/auth before per-device keys exist.
+            properties["auth_token"] = self.auth_token
+        return properties
 
     def _emit_status(self, message: str) -> None:
         if self.on_status:

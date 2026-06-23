@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import socket
 import time
 import unittest
+from unittest.mock import patch
 
 from finance_app.services.voice.network_transport import RemoteAudioPacket, RemoteAudioServer
 
@@ -95,7 +97,8 @@ class VoiceRemoteTransportTests(unittest.TestCase):
 
     def test_phase4_discovery_properties_exclude_secrets(self) -> None:
         server = RemoteAudioServer(host="127.0.0.1", port=45881, auth_token="1234567890abcdef")
-        properties = server._build_discovery_properties("192.168.1.10")
+        with patch.dict(os.environ, {"FINANCE_APP_REMOTE_MDNS_TOKEN_BOOTSTRAP": "0"}):
+            properties = server._build_discovery_properties("192.168.1.10")
 
         self.assertEqual(properties.get("tls_server_name"), "192.168.1.10")
         self.assertEqual(properties.get("endpoint"), "192.168.1.10:45881")
