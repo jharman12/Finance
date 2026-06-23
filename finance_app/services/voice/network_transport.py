@@ -343,7 +343,7 @@ class RemoteAudioServer:
                             f"session_id_present={bool(pairing_session_id)}"
                         )
 
-                        if not authenticated and pairing_code and outer.pairing_manager is not None:
+                        if pairing_code and outer.pairing_manager is not None:
                             if hasattr(outer.pairing_manager, 'verify_pairing_code'):
                                 # Phase 2: Pass session_id to verify_pairing_code for session validation
                                 pairing_verified = outer.pairing_manager.verify_pairing_code(
@@ -366,10 +366,11 @@ class RemoteAudioServer:
                                     else:
                                         session_validation_reason = "unknown"
                                 else:
-                                    authenticated = True
-                                    enrollment_required = True
-                                    auth_mode = "pairing_enrollment"
-                                    issued_device_token = outer._issue_device_token(source_id)
+                                    if not authenticated:
+                                        authenticated = True
+                                        enrollment_required = True
+                                        auth_mode = "pairing_enrollment"
+                                        issued_device_token = outer._issue_device_token(source_id)
                                 
                                 outer._debug_log(f"Pairing code verification for {source_id}: {pairing_verified} ({session_validation_reason})")
 

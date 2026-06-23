@@ -224,6 +224,34 @@ class VoiceRemoteTransportTests(unittest.TestCase):
         self.assertEqual(str(ack.get("pairing_code_hint", "")), "ABC123")
         self.assertEqual(str(ack.get("pairing_session_id", "")), "sess-1")
 
+    def test_authenticated_hello_with_pairing_code_confirms_pairing(self) -> None:
+        server = RemoteAudioServer(
+            host="127.0.0.1",
+            port=0,
+            auth_token="1234567890abcdef",
+            pairing_manager=_FakePairingManager(),
+        )
+        server._device_tokens["node-1"] = "device-token-1234567890abcdef"
+        server.start()
+        try:
+            ack = self._send_and_read_first_line(
+                "127.0.0.1",
+                server.bound_port,
+                {
+                    "type": "hello",
+                    "source_id": "node-1",
+                    "token": "device-token-1234567890abcdef",
+                    "pairing_code": "ABC123",
+                    "pairing_session_id": "sess-1",
+                },
+            )
+        finally:
+            server.stop()
+
+        self.assertEqual(ack.get("type"), "hello_ack")
+        self.assertEqual(bool(ack.get("paired")), True)
+        self.assertEqual(bool(ack.get("pairing_required")), True)
+
 
 if __name__ == "__main__":
     unittest.main()
