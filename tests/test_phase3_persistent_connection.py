@@ -9,6 +9,7 @@ from finance_app.services.voice.persistent_connection import (
     ReconnectConfig,
 )
 from finance_app.services.voice.network_transport import SessionResumption
+from remote_voice_sender import RemoteWakeStreamSender, SenderConfig
 
 
 class TestSessionResumption(unittest.TestCase):
@@ -221,8 +222,8 @@ class TestPersistentRemoteConnection(unittest.TestCase):
         # Mock socket to capture sent message
         with patch.object(self.connection, "_send_json") as mock_send:
             mock_send.return_value = True
-            
-            self.connection.send_audio(1, "base64data", sent_at_ms=1000)
+
+            self.connection.send_audio(1, "base64data", 1000)
             
             # Verify send_json was called
             mock_send.assert_called_once()
@@ -255,6 +256,52 @@ class TestPersistentRemoteConnection(unittest.TestCase):
         self.assertEqual(conn.on_connected, on_connected)
         self.assertEqual(conn.on_disconnected, on_disconnected)
         self.assertEqual(conn.on_error, on_error)
+
+
+class TestRemoteWakeStreamSenderPersistentWiring(unittest.TestCase):
+    """Test that the sender wires streams through the persistent transport."""
+
+    def test_open_stream_uses_persistent_connection(self) -> None:
+        fake_transport = MagicMock()
+        fake_transport.send_audio.return_value = True
+
+        config = SenderConfig(
+            host="localhost",
+            port=9999,
+            token="test-token-1234567890",
+            source_id="test-device",
+            ca_cert_path="",
+            tls_server_name=None,
+            wake_phrase="hey steven",
+            wake_mode="phrase_vosk",
+            vosk_model_path="models/vosk-model-en-us-0.22-lgraph",
+            openwakeword_model_path=None,
+            wake_threshold=0.5,
+            sample_rate=16000,
+            blocksize=1600,
+            preroll_ms=2000,
+            post_wake_grace_ms=1200,
+            max_stream_seconds=12.0,
+            cooldown_seconds=0.8,
+            endpoint_min_speech_ms=300,
+            endpoint_silence_ms=700,
+            endpoint_max_utterance_ms=12000,
+            energy_threshold=450.0,
+        )
+
+        with patch.object(RemoteWakeStreamSender, "_build_wake_detector", return_value=MagicMock()), patch.object(
+            RemoteWakeStreamSender,
+            "_ensure_persistent_connection",
+            return_value=fake_transport,
+        ):
+            sender = RemoteWakeStreamSender(config)
+            sender._preroll_buffer.append(b"audio-frame-1")
+
+            sender._open_stream(time.monotonic())
+
+            self.assertIs(sender._connection, fake_transport)
+            fake_transport.send_audio.assert_called_once_with(b"audio-frame-1")
+            self.assertEqual(sender._stream_started_at > 0.0, True)
 
 
 class TestPhase3Protocol(unittest.TestCase):

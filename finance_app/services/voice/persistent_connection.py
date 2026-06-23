@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import random
 import socket
@@ -65,11 +66,13 @@ class PersistentRemoteConnection:
         self._stop_event = threading.Event()
         self._heartbeat_thread: threading.Thread | None = None
         self._reconnect_thread: threading.Thread | None = None
+        self._heartbeat_thread_lock = threading.Lock()
         
         # Session resumption state (Phase 3)
         self.connection_id = ""
         self.last_seq_no = 0
         self.connected = False
+        self._audio_seq_no = 0
         
         # Callbacks
         self.on_connected: Callable[[], None] | None = None
@@ -119,11 +122,30 @@ class PersistentRemoteConnection:
         if self._reconnect_thread is not None:
             self._reconnect_thread.join(timeout=2.0)
 
-    def send_audio(self, seq_no: int, audio_b64: str, sent_at_ms: int | None = None) -> bool:
-        """Send audio frame on persistent connection.
-        
-        Returns True if sent successfully, False if disconnected.
+    def send_audio(self, *args, chunk: bytes | None = None, seq_no: int | None = None, audio_b64: str | None = None, sent_at_ms: int | None = None) -> bool:
+        """Send an audio frame on the persistent connection.
+
+        Accepts either raw PCM bytes or a pre-encoded base64 payload for compatibility.
+        If seq_no is omitted, the connection manages an internal increasing sequence.
         """
+        if args:
+            if len(args) == 1 and isinstance(args[0], (bytes, bytearray)):
+                chunk = bytes(args[0])
+            elif len(args) >= 2 and isinstance(args[0], int) and isinstance(args[1], str):
+                seq_no = args[0]
+                audio_b64 = args[1]
+                if len(args) >= 3 and sent_at_ms is None and isinstance(args[2], int):
+                    sent_at_ms = args[2]
+            else:
+                raise TypeError("send_audio() accepts either raw bytes or (seq_no, audio_b64, [sent_at_ms])")
+
+        if chunk is not None:
+            audio_b64 = base64.b64encode(chunk).decode("ascii")
+        if audio_b64 is None:
+            raise ValueError("audio_b64 or chunk must be provided")
+        if seq_no is None:
+            self._audio_seq_no += 1
+            seq_no = self._audio_seq_no
         message = {
             "type": "audio",
             "connection_id": self.connection_id,
@@ -168,7 +190,7 @@ class PersistentRemoteConnection:
                 return False
 
             # Receive hello_ack
-            ack_line = self._receive_line()
+            ack_line = self._receive_line(timeout_seconds=4.0)
             if not ack_line:
                 return False
 
@@ -180,6 +202,7 @@ class PersistentRemoteConnection:
             self.connection_id = str(ack_msg.get("connection_id", "")).strip()
             if not self.connection_id:
                 self.connection_id = f"{self.source_id}-{int(time.time() * 1000)}"
+            self._audio_seq_no = max(self._audio_seq_no, self.last_seq_no)
             
             self.connected = True
             if self.on_connected:
@@ -210,6 +233,22 @@ class PersistentRemoteConnection:
                             self.connected = False
                         if self.on_disconnected:
                             self.on_disconnected("heartbeat_failed")
+                        continue
+
+                    pong_line = self._receive_line(timeout_seconds=2.0)
+                    if not pong_line:
+                        with self._lock:
+                            self.connected = False
+                        if self.on_disconnected:
+                            self.on_disconnected("heartbeat_timeout")
+                        continue
+
+                    try:
+                        pong_msg = json.loads(pong_line)
+                        if str(pong_msg.get("type", "")).lower() != "pong":
+                            continue
+                    except Exception:
+                        continue
             
             except Exception as e:
                 self._emit_error(f"Heartbeat error: {e}")
@@ -273,6 +312,10 @@ class PersistentRemoteConnection:
         
         return max(int(delay_ms + jitter), config.initial_delay_ms)
 
+    def close(self) -> None:
+        """Compatibility alias for stop()."""
+        self.stop()
+
     def _send_json(self, message: dict) -> bool:
         """Send JSON message on socket."""
         try:
@@ -290,21 +333,27 @@ class PersistentRemoteConnection:
                 self.connected = False
             return False
 
-    def _receive_line(self) -> str:
+    def _receive_line(self, timeout_seconds: float | None = None) -> str:
         """Receive one line from socket."""
         try:
             with self._lock:
                 if self._socket is None:
                     return ""
-                
-                line = b""
-                while b"\n" not in line:
-                    part = self._socket.recv(4096)
-                    if not part:
-                        return ""
-                    line += part
-                
-                return line.split(b"\n", 1)[0].decode("utf-8", errors="ignore")
+                previous_timeout = self._socket.gettimeout()
+                if timeout_seconds is not None:
+                    self._socket.settimeout(timeout_seconds)
+                try:
+                    line = b""
+                    while b"\n" not in line:
+                        part = self._socket.recv(4096)
+                        if not part:
+                            return ""
+                        line += part
+
+                    return line.split(b"\n", 1)[0].decode("utf-8", errors="ignore")
+                finally:
+                    if timeout_seconds is not None:
+                        self._socket.settimeout(previous_timeout)
         
         except Exception:
             return ""

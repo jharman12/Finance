@@ -24,6 +24,7 @@ from finance_app.services.voice.discovery import (
 )
 from finance_app.services.voice.pairing import PairingCodeGenerator
 from finance_app.services.voice.remote_config import RemoteVoiceConfigManager
+from finance_app.services.voice.persistent_connection import PersistentRemoteConnection, ReconnectConfig
 from finance_app.services.voice.vad_endpointing import VoiceActivityEndpoint
 from finance_app.services.voice.wake_detector import OpenWakeWordDetector, VoskPhraseWakeDetector
 
@@ -260,6 +261,7 @@ class RemoteWakeStreamSender:
         self._audio_queue: queue.Queue[bytes] = queue.Queue(maxsize=128)
         self._stop_event = threading.Event()
         self._connection: SecureRemoteAudioConnection | None = None
+        self._persistent_connection: PersistentRemoteConnection | None = None
         self._cooldown_until = 0.0
         self._stream_started_at = 0.0
         self._grace_deadline = 0.0
@@ -274,6 +276,35 @@ class RemoteWakeStreamSender:
         self._last_announced_pairing_code: str | None = None
         self._waiting_for_pair_notice_logged = False
         self._stream_had_speech = False
+
+    def _ensure_persistent_connection(self) -> PersistentRemoteConnection:
+        connection = self._persistent_connection
+        if connection is not None and connection.connected:
+            return connection
+
+        persistent = PersistentRemoteConnection(
+            host=self.config.host,
+            port=self.config.port,
+            token=self.config.token,
+            source_id=self.config.source_id,
+            pairing_code=self._pairing_code or "",
+            pairing_session_id="",
+            ca_cert_path=self.config.ca_cert_path,
+            tls_server_name=self.config.tls_server_name,
+            allow_untrusted=False,
+            reconnect_config=ReconnectConfig(),
+        )
+        persistent.on_connected = lambda: _debug(
+            f"Persistent connection established for {self.config.source_id} connection_id={persistent.connection_id or '(pending)'}"
+        )
+        persistent.on_disconnected = lambda reason: _log(f"Persistent connection disconnected ({reason}).")
+        persistent.on_error = lambda message: _debug(f"Persistent connection error: {message}")
+
+        if not persistent.start():
+            raise RuntimeError("Failed to establish persistent remote connection.")
+
+        self._persistent_connection = persistent
+        return persistent
 
     def run(self) -> int:
         try:
@@ -346,6 +377,7 @@ class RemoteWakeStreamSender:
             return 1
         finally:
             self._close_stream(reason="shutdown")
+            self._shutdown_persistent_connection()
             if self._discovery_browser is not None:
                 try:
                     self._discovery_browser.stop()
@@ -472,6 +504,10 @@ class RemoteWakeStreamSender:
             self._waiting_for_pair_notice_logged = False
             self._pairing_code = None
             self._last_announced_pairing_code = None
+            try:
+                self._ensure_persistent_connection()
+            except Exception as exc:
+                _log(f"Persistent connection could not be started after pairing: {exc}")
             _log(f"Paired with main device at {self.config.host}:{self.config.port}. Waiting for wake phrase.")
             return
 
@@ -514,6 +550,10 @@ class RemoteWakeStreamSender:
         self._waiting_for_pair_notice_logged = False
         self._pairing_code = None
         self._last_announced_pairing_code = None
+        try:
+            self._ensure_persistent_connection()
+        except Exception as exc:
+            _log(f"Persistent connection could not be started after pairing: {exc}")
         _log(f"Paired with main device at {self.config.host}:{self.config.port}. Waiting for wake phrase.")
 
     def _connect_pair_probe(self, pairing_code: str) -> SecureRemoteAudioConnection | None:
@@ -576,57 +616,22 @@ class RemoteWakeStreamSender:
                 self._cooldown_until = time.monotonic() + self.config.cooldown_seconds
                 return
 
-        # After successful pairing, normal stream connections do not need to
-        # re-submit a one-time pairing code.
+        # After successful pairing, audio is sent over the already-open persistent connection.
         self._pairing_code = None
-        connection = SecureRemoteAudioConnection(self.config, pairing_code="")
+        connection = self._ensure_persistent_connection()
         try:
-            connection.connect()
             _debug(f"Sending preroll buffer chunks={len(self._preroll_buffer)}")
             for buffered_chunk in self._preroll_buffer:
                 connection.send_audio(buffered_chunk)
         except Exception as exc:
-            recovered = False
-            if self._has_verified_receiver_cert() and self._is_cert_verification_error(exc):
-                _log("Stored receiver certificate no longer matches. Refreshing trust and retrying stream connection.")
-                connection.close()
-                refresh_connection = SecureRemoteAudioConnection(
-                    self.config,
-                    pairing_code="",
-                    allow_untrusted=True,
-                )
-                try:
-                    refresh_connection.connect()
-                    _debug(f"Sending preroll buffer chunks={len(self._preroll_buffer)} after trust refresh")
-                    for buffered_chunk in self._preroll_buffer:
-                        refresh_connection.send_audio(buffered_chunk)
-                    connection = refresh_connection
-                    recovered = True
-                except Exception as retry_exc:
-                    refresh_connection.close()
-                    _log(
-                        "Remote audio connection failed: "
-                        f"{retry_exc} (target={self.config.host}:{self.config.port}, "
-                        f"tls_name={self.config.tls_server_name or self.config.host})"
-                    )
-                    _log(
-                        "Check: main PC app running with remote audio enabled, bind host set for LAN, firewall open on port, "
-                        "and TLS cert/server name match."
-                    )
-            if recovered:
-                pass
-            else:
-                connection.close()
-                _log(
-                    "Remote audio connection failed: "
-                    f"{exc} (target={self.config.host}:{self.config.port}, tls_name={self.config.tls_server_name or self.config.host})"
-                )
-                _log(
-                    "Check: main PC app running with remote audio enabled, bind host set for LAN, firewall open on port, "
-                    "and TLS cert/server name match."
-                )
-                self._cooldown_until = time.monotonic() + self.config.cooldown_seconds
-                return
+            _log(
+                "Persistent remote audio connection failed: "
+                f"{exc} (target={self.config.host}:{self.config.port}, tls_name={self.config.tls_server_name or self.config.host})"
+            )
+            _log(
+                "Check: main PC app running with remote audio enabled, bind host set for LAN, firewall open on port, "
+                "and TLS cert/server name match."
+            )
             self._cooldown_until = time.monotonic() + self.config.cooldown_seconds
             return
 
@@ -641,7 +646,6 @@ class RemoteWakeStreamSender:
         )
 
     def _close_stream(self, reason: str) -> None:
-        connection = self._connection
         self._connection = None
         self.endpoint.reset()
         self._stream_started_at = 0.0
@@ -657,9 +661,17 @@ class RemoteWakeStreamSender:
 
         self._cooldown_until = time.monotonic() + cooldown_seconds
         self._reset_wake_detector_state()
-        if connection is not None:
+        _log(f"Remote stream closed ({reason}).")
+
+    def _shutdown_persistent_connection(self) -> None:
+        connection = self._persistent_connection
+        self._persistent_connection = None
+        if connection is None:
+            return
+        try:
             connection.close()
-            _log(f"Remote stream closed ({reason}).")
+        except Exception:
+            pass
 
     def _reset_wake_detector_state(self) -> None:
         """Reset detector session state between streams to prevent stale matches."""

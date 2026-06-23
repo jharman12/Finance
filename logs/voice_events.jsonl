@@ -889,3 +889,13 @@
 {"ts": "2026-06-23T00:14:00.521305+00:00", "event": "continuation_resumed", "utterance_id": 1}
 {"ts": "2026-06-23T00:14:02.840955+00:00", "event": "continuation_window_started", "utterance_id": 1, "seconds": 0.7}
 {"ts": "2026-06-23T00:14:21.403460+00:00", "event": "voice_stopped"}
+{"ts": "2026-06-23T01:45:39.606295+00:00", "event": "remote_capture_start", "source_id": "JenkinsEnvy", "utterance_id": 1}
+{"ts": "2026-06-23T01:45:42.566483+00:00", "event": "continuation_window_started", "utterance_id": 1, "seconds": 0.7}
+{"ts": "2026-06-23T01:45:42.946433+00:00", "event": "continuation_resumed", "utterance_id": 1}
+{"ts": "2026-06-23T01:45:43.956271+00:00", "event": "continuation_window_started", "utterance_id": 1, "seconds": 0.7}
+{"ts": "2026-06-23T01:45:58.462684+00:00", "event": "continuation_timeout", "utterance_id": 1, "waited_seconds": 0.7}
+{"ts": "2026-06-23T01:45:58.486363+00:00", "event": "endpoint_complete", "utterance_id": 1, "reason": "continuation_timeout", "speech_ms": 2500}
+{"ts": "2026-06-23T01:46:04.122341+00:00", "event": "command_dispatch", "utterance_id": 1, "source_id": "JenkinsEnvy", "provider": "vosk", "confidence": 0.65, "latency_ms": 5623, "used_fallback": true, "fallback_reason": "provider_error", "chars": 42}
+{"ts": "2026-06-23T01:46:04.126527+00:00", "event": "cooldown_started", "utterance_id": 1, "seconds": 0.7}
+{"ts": "2026-06-23T01:46:22.485236+00:00", "event": "voice_stopped"}
+{"ts": "2026-06-23T01:49:38.748220+00:00", "event": "voice_stopped"}
