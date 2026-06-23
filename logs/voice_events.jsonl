@@ -881,3 +881,6 @@
 {"ts": "2026-06-22T23:16:32.696842+00:00", "event": "cooldown_started", "utterance_id": 1, "seconds": 0.7}
 {"ts": "2026-06-22T23:16:33.668324+00:00", "event": "wake_detected", "source_id": "local-usb-mic", "wake_mode": "phrase_vosk", "utterance_id": 2}
 {"ts": "2026-06-22T23:16:37.864541+00:00", "event": "voice_stopped"}
+{"ts": "2026-06-23T00:08:37.314497+00:00", "event": "voice_stopped"}
+{"ts": "2026-06-23T00:10:01.536105+00:00", "event": "voice_stopped"}
+{"ts": "2026-06-23T00:10:36.424040+00:00", "event": "voice_stopped"}

@@ -10,97 +10,81 @@ from finance_app.services.voice.pairing_manager import PairingState, RemoteVoice
 
 
 class TestPairingCodeGeneratorWithSessionId(unittest.TestCase):
-    """Test HMAC-based pairing code generation with session IDs (Phase 2)."""
+    """Test deterministic pairing code generation with session-based validation (Phase 2)."""
 
-    def test_generate_code_with_session_id(self) -> None:
-        """Test that session_id produces deterministic HMAC-based code."""
+    def test_generate_code_deterministic_regardless_of_session_id(self) -> None:
+        """Test that code is deterministic and NOT affected by session_id.
+        
+        Phase 2: Remote device doesn't know session_id, so code must be deterministic.
+        Session_id is only used for server-side validation, not code generation.
+        """
         auth_token = "1234567890abcdef"
         source_id = "remote-device-1"
-        session_id = "session-12345"
+        session_id_1 = "session-12345"
+        session_id_2 = "session-67890"
 
-        code1 = PairingCodeGenerator.generate(auth_token, source_id, session_id)
-        code2 = PairingCodeGenerator.generate(auth_token, source_id, session_id)
+        # Same code regardless of session_id
+        code_with_session_1 = PairingCodeGenerator.generate(auth_token, source_id, session_id_1)
+        code_with_session_2 = PairingCodeGenerator.generate(auth_token, source_id, session_id_2)
+        code_without_session = PairingCodeGenerator.generate(auth_token, source_id, "")
 
-        # Same inputs should produce same code
-        self.assertEqual(code1.code, code2.code)
-        self.assertEqual(len(code1.code), 6)
+        # All should produce identical code
+        self.assertEqual(code_with_session_1.code, code_with_session_2.code)
+        self.assertEqual(code_with_session_1.code, code_without_session.code)
+        self.assertEqual(len(code_with_session_1.code), 6)
 
-    def test_different_session_ids_produce_different_codes(self) -> None:
-        """Test that different session IDs produce different codes."""
-        auth_token = "1234567890abcdef"
+    def test_code_is_deterministic_for_remote_device_display(self) -> None:
+        """Test that code is deterministic so remote device can independently compute it."""
+        auth_token = "test-token-1234567890"
         source_id = "remote-device-1"
 
         code1 = PairingCodeGenerator.generate(auth_token, source_id, "session-1")
-        code2 = PairingCodeGenerator.generate(auth_token, source_id, "session-2")
+        code2 = PairingCodeGenerator.generate(auth_token, source_id, "different-session")
 
-        # Different session_ids should produce different codes
-        self.assertNotEqual(code1.code, code2.code)
+        # Same code - remote device can compute without knowing session_id
+        self.assertEqual(code1.code, code2.code)
 
     def test_session_code_expires_after_60_seconds(self) -> None:
-        """Test that session codes expire after 60 seconds."""
+        """Test that pairing codes expire after 60 seconds."""
         auth_token = "1234567890abcdef"
         source_id = "remote-device-1"
-        session_id = "session-123"
 
         # Code with 55 seconds elapsed
         past_time = time.time() - 55
-        code = PairingCodeGenerator.generate(auth_token, source_id, session_id, past_time)
+        code = PairingCodeGenerator.generate(auth_token, source_id, "", past_time)
         self.assertTrue(code.is_valid())
 
         # Code with 65 seconds elapsed
         past_time = time.time() - 65
-        code = PairingCodeGenerator.generate(auth_token, source_id, session_id, past_time)
+        code = PairingCodeGenerator.generate(auth_token, source_id, "", past_time)
         self.assertFalse(code.is_valid())
 
-    def test_verify_with_session_id(self) -> None:
-        """Test that verify() correctly checks session_id."""
-        auth_token = "1234567890abcdef"
-        source_id = "remote-device-1"
-        session_id = "session-xyz"
-
-        code = PairingCodeGenerator.generate(auth_token, source_id, session_id)
-
-        # Verify with correct session_id
-        self.assertTrue(PairingCodeGenerator.verify(code.code, auth_token, source_id, session_id))
-
-        # Verify with wrong session_id should fail
-        self.assertFalse(
-            PairingCodeGenerator.verify(code.code, auth_token, source_id, "different-session")
-        )
-
-    def test_verify_code_without_session_id_falls_back_to_legacy(self) -> None:
-        """Test backward compatibility when session_id not provided to verify."""
+    def test_verify_code_independent_of_session_id(self) -> None:
+        """Test that code verification works without session_id knowledge."""
         auth_token = "1234567890abcdef"
         source_id = "remote-device-1"
 
-        # Generate code without session_id (legacy mode)
+        # Generate code (remote device does this)
         code = PairingCodeGenerator.generate(auth_token, source_id, "")
 
-        # Verify without session_id should work (fallback to legacy)
+        # Verify code (server does this, with different session_ids)
+        # Both should succeed because code doesn't depend on session_id
+        self.assertTrue(PairingCodeGenerator.verify(code.code, auth_token, source_id, "session-1"))
+        self.assertTrue(PairingCodeGenerator.verify(code.code, auth_token, source_id, "session-2"))
         self.assertTrue(PairingCodeGenerator.verify(code.code, auth_token, source_id, ""))
 
-    def test_code_uses_hmac_with_session_id(self) -> None:
-        """Test that session_id code uses HMAC algorithm."""
-        auth_token = "test-token"
-        source_id = "device-1"
-        session_id = "session-1"
+    def test_verify_code_is_case_insensitive(self) -> None:
+        """Test that code verification is case insensitive."""
+        auth_token = "1234567890abcdef"
+        source_id = "remote-device-1"
 
-        code = PairingCodeGenerator.generate(auth_token, source_id, session_id)
+        code = PairingCodeGenerator.generate(auth_token, source_id, "")
 
-        # Manually compute expected HMAC
-        message = f"{source_id}:{session_id}".encode("utf-8")
-        digest = hmac.new(auth_token.encode("utf-8"), message, hashlib.sha256).digest()
+        # Verify with lowercase
+        self.assertTrue(PairingCodeGenerator.verify(code.code.lower(), auth_token, source_id))
 
-        # Extract first 6 chars from digest
-        alphabet = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"
-        expected_chars = []
-        for i in range(6):
-            byte_val = digest[i]
-            char_index = byte_val % len(alphabet)
-            expected_chars.append(alphabet[char_index])
-        expected_code = "".join(expected_chars)
-
-        self.assertEqual(code.code, expected_code)
+        # Verify with uppercase
+        self.assertTrue(PairingCodeGenerator.verify(code.code.upper(), auth_token, source_id))
 
 
 class TestPairingStateWithSessionId(unittest.TestCase):

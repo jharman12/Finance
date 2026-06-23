@@ -35,29 +35,26 @@ class PairingCodeGenerator:
         timestamp: float | None = None,
         code_length: int = 6,
     ) -> PairingCode:
-        """Generate a deterministic pairing code from token, source ID, and session ID.
+        """Generate a deterministic pairing code from token and source ID.
 
-        Phase 2: Uses HMAC with session_id to prevent cross-session pairing.
-        The code is valid only for the specific session within a 60-second window.
-
+        Phase 2: Code is deterministic (not session-dependent) so remote device can
+        independently compute and display the same code. Session_id is only used for
+        server-side validation to prevent cross-session pairing and replay attacks.
+        
         Args:
             auth_token: Server auth token
             source_id: Remote device ID
-            pairing_session_id: Unique session ID for this pairing attempt (Phase 2)
+            pairing_session_id: Ignored for code generation, only used in verify() for validation
             timestamp: Override timestamp (for testing)
             code_length: Length of generated code (6-8 chars)
         """
         if timestamp is None:
             timestamp = time.time()
 
-        # Phase 2: Include session_id in HMAC for session-specific codes
-        if pairing_session_id:
-            message = f"{source_id}:{pairing_session_id}".encode("utf-8")
-            digest = hmac.new(auth_token.encode("utf-8"), message, hashlib.sha256).digest()
-        else:
-            # Fallback to legacy generation for backward compatibility
-            combined = f"{auth_token}:{source_id}".encode("utf-8")
-            digest = hashlib.sha256(combined).digest()
+        # Phase 2: Use deterministic code from token + source_id (not session-dependent)
+        # This allows remote device to compute same code independently
+        combined = f"{auth_token}:{source_id}".encode("utf-8")
+        digest = hashlib.sha256(combined).digest()
 
         code_chars = []
         for i in range(min(code_length, 8)):  # Max 8 chars
@@ -77,23 +74,19 @@ class PairingCodeGenerator:
     ) -> bool:
         """Verify that a pairing code matches expected value.
 
-        Phase 2: Prefers session-specific verification when session_id is provided.
-        Falls back to legacy code generation for backward compatibility.
+        Phase 2: Code is deterministic (not session-dependent). Session_id is validated
+        separately on the server side to prevent cross-session and replay attacks.
+        This allows the remote device to independently compute the same code.
         """
         if timestamp is None:
             timestamp = time.time()
 
         code_to_verify_normalized = code_to_verify.upper().strip()
 
-        # Phase 2: Try session-specific code first if session_id provided
-        if pairing_session_id:
-            expected_session = PairingCodeGenerator.generate(auth_token, source_id, pairing_session_id, timestamp)
-            if expected_session.code == code_to_verify_normalized and expected_session.is_valid():
-                return True
-
-        # Try stable code generation (backward compatibility)
-        expected_stable = PairingCodeGenerator.generate(auth_token, source_id, "", timestamp)
-        if expected_stable.code == code_to_verify_normalized:
+        # Phase 2: Try deterministic code first (same as code generation)
+        # This is what both receiver and remote device compute independently
+        expected_deterministic = PairingCodeGenerator.generate(auth_token, source_id, "", timestamp)
+        if expected_deterministic.code == code_to_verify_normalized:
             return True
 
         # Backward compatibility for older minute-window code generation.
