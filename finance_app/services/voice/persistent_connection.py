@@ -214,8 +214,10 @@ class PersistentRemoteConnection:
             if self.last_seq_no > 0:
                 hello_msg["last_seq_no"] = self.last_seq_no
 
-            if not self._send_json(hello_msg):
-                return False
+            # Handshake send must bypass _send_json because connected=False until
+            # hello_ack is validated.
+            hello_line = (json.dumps(hello_msg, ensure_ascii=True) + "\n").encode("utf-8")
+            self._socket.sendall(hello_line)
 
             # Receive hello_ack
             ack_line = self._receive_line(timeout_seconds=4.0)
@@ -338,6 +340,24 @@ class PersistentRemoteConnection:
         jitter = random.uniform(-jitter_amount, jitter_amount)
         
         return max(int(delay_ms + jitter), config.initial_delay_ms)
+
+    def _persist_peer_certificate(self) -> None:
+        """Persist peer certificate for subsequent verified TLS connections."""
+        sock = self._socket
+        if sock is None:
+            return
+        try:
+            peer_cert_der = sock.getpeercert(binary_form=True)
+        except Exception:
+            return
+        if not peer_cert_der:
+            return
+
+        config_dir = Path.home() / ".finance-voice"
+        config_dir.mkdir(parents=True, exist_ok=True)
+        receiver_cert_path = config_dir / "receiver-ca-cert.pem"
+        receiver_cert_path.write_text(ssl.DER_cert_to_PEM_cert(peer_cert_der), encoding="utf-8")
+        self.ca_cert_path = str(receiver_cert_path)
 
     def close(self) -> None:
         """Compatibility alias for stop()."""

@@ -258,6 +258,32 @@ class TestPersistentRemoteConnection(unittest.TestCase):
         self.assertEqual(conn.on_disconnected, on_disconnected)
         self.assertEqual(conn.on_error, on_error)
 
+    def test_connect_sends_hello_before_connected(self) -> None:
+        """Handshake should send hello directly and then mark connected on ack."""
+        conn = PersistentRemoteConnection(
+            host="localhost",
+            port=9999,
+            token="test-token-1234567890",
+            source_id="test-device",
+            allow_untrusted=True,
+        )
+
+        mock_socket = MagicMock()
+        mock_socket.recv.return_value = b'{"type":"hello_ack","connection_id":"conn-1"}\n'
+        mock_context = MagicMock()
+        mock_context.wrap_socket.return_value = mock_socket
+
+        with patch("finance_app.services.voice.persistent_connection.socket.create_connection", return_value=MagicMock()), patch(
+            "finance_app.services.voice.persistent_connection.ssl.create_default_context",
+            return_value=mock_context,
+        ), patch.object(conn, "_persist_peer_certificate", return_value=None):
+            result = conn._connect()
+
+        self.assertTrue(result)
+        self.assertTrue(conn.connected)
+        self.assertEqual(conn.connection_id, "conn-1")
+        mock_socket.sendall.assert_called_once()
+
     def test_connect_retries_with_trust_refresh_on_cert_failure(self) -> None:
         """Test that TLS verification failures retry with trust refresh."""
         conn = PersistentRemoteConnection(

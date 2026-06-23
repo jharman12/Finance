@@ -632,7 +632,7 @@ class RemoteWakeStreamSender:
                 "Check: main PC app running with remote audio enabled, bind host set for LAN, firewall open on port, "
                 "and TLS cert/server name match."
             )
-            self._cooldown_until = time.monotonic() + self.config.cooldown_seconds
+            self._cooldown_until = time.monotonic() + max(self.config.cooldown_seconds, 3.0)
             return
 
         self._connection = connection
