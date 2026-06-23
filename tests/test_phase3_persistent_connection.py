@@ -362,6 +362,45 @@ class TestRemoteWakeStreamSenderPersistentWiring(unittest.TestCase):
             self.assertTrue(sender._paired_with_main)
             mock_persistent.assert_not_called()
 
+    def test_wake_connection_failure_does_not_raise(self) -> None:
+        """Wake-triggered connection failures should not crash sender loop."""
+        config = SenderConfig(
+            host="localhost",
+            port=9999,
+            token="test-token-1234567890",
+            source_id="test-device",
+            ca_cert_path="",
+            tls_server_name=None,
+            wake_phrase="hey steven",
+            wake_mode="phrase_vosk",
+            vosk_model_path="models/vosk-model-en-us-0.22-lgraph",
+            openwakeword_model_path=None,
+            wake_threshold=0.5,
+            sample_rate=16000,
+            blocksize=1600,
+            preroll_ms=2000,
+            post_wake_grace_ms=1200,
+            max_stream_seconds=12.0,
+            cooldown_seconds=0.8,
+            endpoint_min_speech_ms=300,
+            endpoint_silence_ms=700,
+            endpoint_max_utterance_ms=12000,
+            energy_threshold=450.0,
+        )
+
+        with patch.object(RemoteWakeStreamSender, "_build_wake_detector", return_value=MagicMock()), patch.object(
+            RemoteWakeStreamSender,
+            "_ensure_persistent_connection",
+            side_effect=RuntimeError("Failed to establish persistent remote connection."),
+        ):
+            sender = RemoteWakeStreamSender(config)
+            sender._paired_with_main = True
+
+            with patch.object(sender, "_detect_wake", return_value=True):
+                sender._handle_chunk(b"chunk")
+
+            self.assertGreater(sender._cooldown_until, 0.0)
+
 
 class TestPhase3Protocol(unittest.TestCase):
     """Integration tests for Phase 3 persistent connection protocol."""

@@ -279,7 +279,7 @@ class RemoteWakeStreamSender:
 
     def _ensure_persistent_connection(self) -> PersistentRemoteConnection:
         connection = self._persistent_connection
-        if connection is not None and connection.connected:
+        if connection is not None:
             return connection
 
         persistent = PersistentRemoteConnection(
@@ -442,11 +442,17 @@ class RemoteWakeStreamSender:
                 return
             if self._detect_wake(chunk):
                 _debug("Wake detector returned true; opening remote stream.")
-                self._open_stream(now)
+                try:
+                    self._open_stream(now)
+                except Exception as exc:
+                    _log(f"Failed to open remote stream: {exc}")
+                    self._cooldown_until = time.monotonic() + self.config.cooldown_seconds
             return
 
         try:
-            self._connection.send_audio(chunk)
+            sent = self._connection.send_audio(chunk)
+            if not sent:
+                raise RuntimeError("Persistent connection is not currently connected.")
         except Exception as exc:
             _log(f"Remote audio send failed: {exc}")
             self._close_stream(reason="send_error")
@@ -610,11 +616,13 @@ class RemoteWakeStreamSender:
 
         # After successful pairing, audio is sent over the already-open persistent connection.
         self._pairing_code = None
-        connection = self._ensure_persistent_connection()
         try:
+            connection = self._ensure_persistent_connection()
             _debug(f"Sending preroll buffer chunks={len(self._preroll_buffer)}")
             for buffered_chunk in self._preroll_buffer:
-                connection.send_audio(buffered_chunk)
+                sent = connection.send_audio(buffered_chunk)
+                if not sent:
+                    raise RuntimeError("Persistent connection is not currently connected.")
         except Exception as exc:
             _log(
                 "Persistent remote audio connection failed: "
