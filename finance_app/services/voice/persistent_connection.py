@@ -63,7 +63,7 @@ class PersistentRemoteConnection:
         self.reconnect_config = reconnect_config or ReconnectConfig()
 
         self._socket: ssl.SSLSocket | None = None
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._stop_event = threading.Event()
         self._heartbeat_thread: threading.Thread | None = None
         self._reconnect_thread: threading.Thread | None = None
