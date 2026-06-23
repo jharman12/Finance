@@ -106,6 +106,10 @@ class SecureRemoteAudioConnection:
         self.allow_untrusted = allow_untrusted
         self.paired_acknowledged = False
         self.pairing_required = False
+        self.auth_rejected = False
+        self.pairing_code_hint = ""
+        self.pairing_session_id_hint = ""
+        self.device_token_issued = ""
         self.server_token_fingerprint = ""
         self._socket: ssl.SSLSocket | None = None
         self._seq_no = 0
@@ -167,6 +171,10 @@ class SecureRemoteAudioConnection:
                         if str(ack_msg.get("type", "")).strip().lower() == "hello_ack":
                             self.paired_acknowledged = bool(ack_msg.get("paired", False))
                             self.pairing_required = bool(ack_msg.get("pairing_required", False))
+                            self.auth_rejected = bool(ack_msg.get("auth_rejected", False))
+                            self.pairing_code_hint = str(ack_msg.get("pairing_code_hint", "")).strip()
+                            self.pairing_session_id_hint = str(ack_msg.get("pairing_session_id", "")).strip()
+                            self.device_token_issued = str(ack_msg.get("device_token_issued", "")).strip()
                             self.server_token_fingerprint = str(ack_msg.get("server_token_fingerprint", "")).strip()
                             _debug(
                                 "hello_ack parsed: "
@@ -409,17 +417,6 @@ class RemoteWakeStreamSender:
             self.config.host = device.host
         if device.port:
             self.config.port = int(device.port)
-        discovered_token = device.properties.get("auth_token", "").strip()
-        bootstrap_enabled = _bool_env("FINANCE_APP_REMOTE_MDNS_TOKEN_BOOTSTRAP", True)
-        if discovered_token:
-            if bootstrap_enabled:
-                self.config.token = discovered_token
-                _debug(
-                    "Pairing diagnostic: discovered receiver token fingerprint="
-                    f"{_token_fingerprint(self.config.token)}"
-                )
-            else:
-                _debug("Ignoring auth_token from mDNS payload (Phase 4 secure mode).")
         discovered_tls_server_name = device.properties.get("tls_server_name", "").strip()
         if discovered_tls_server_name:
             self.config.tls_server_name = discovered_tls_server_name
@@ -510,6 +507,8 @@ class RemoteWakeStreamSender:
         connection.close()
 
         if paired_acknowledged:
+            if connection.device_token_issued:
+                self._store_device_token(connection.device_token_issued)
             self._paired_with_main = True
             self._waiting_for_pair_notice_logged = False
             self._pairing_code = None
@@ -528,16 +527,21 @@ class RemoteWakeStreamSender:
 
         # Phase 2: active pairing mode is open on main, now send pairing code.
         if not self._pairing_code:
-            self._pairing_code = PairingCodeGenerator.generate(self.config.token, self.config.source_id).code
-            _debug(
-                "Pairing diagnostic: local token fingerprint="
-                f"{_token_fingerprint(self.config.token)} source_id={self.config.source_id}"
-            )
+            self._pairing_code = connection.pairing_code_hint or ""
+            hinted_session = connection.pairing_session_id_hint or ""
+            if hinted_session:
+                self.config.pairing_session_id = hinted_session
+            if not self._pairing_code:
+                _debug("Pairing is active but server did not provide pairing_code_hint yet.")
+                return
         if self._pairing_code != self._last_announced_pairing_code:
             self._last_announced_pairing_code = self._pairing_code
             _log(f"Pairing code for verification: {self._pairing_code}")
 
-        confirm_connection = self._connect_pair_probe(pairing_code=self._pairing_code)
+        confirm_connection = self._connect_pair_probe(
+            pairing_code=self._pairing_code,
+            pairing_session_id=self.config.pairing_session_id or "",
+        )
         if confirm_connection is None:
             return
 
@@ -552,17 +556,21 @@ class RemoteWakeStreamSender:
             _log("Pairing request sent, but main app has not confirmed yet. Please keep the pairing dialog open.")
             return
 
+        if confirm_connection.device_token_issued:
+            self._store_device_token(confirm_connection.device_token_issued)
+
         self._paired_with_main = True
         self._waiting_for_pair_notice_logged = False
         self._pairing_code = None
         self._last_announced_pairing_code = None
         _log(f"Paired with main device at {self.config.host}:{self.config.port}. Waiting for wake phrase.")
 
-    def _connect_pair_probe(self, pairing_code: str) -> SecureRemoteAudioConnection | None:
+    def _connect_pair_probe(self, pairing_code: str, pairing_session_id: str = "") -> SecureRemoteAudioConnection | None:
         allow_untrusted = not self._has_verified_receiver_cert()
         connection = SecureRemoteAudioConnection(
             self.config,
             pairing_code=pairing_code,
+            pairing_session_id=pairing_session_id,
             allow_untrusted=allow_untrusted,
         )
         try:
@@ -575,6 +583,7 @@ class RemoteWakeStreamSender:
                 refresh_connection = SecureRemoteAudioConnection(
                     self.config,
                     pairing_code=pairing_code,
+                    pairing_session_id=pairing_session_id,
                     allow_untrusted=True,
                 )
                 try:
@@ -606,6 +615,17 @@ class RemoteWakeStreamSender:
     def _has_verified_receiver_cert(self) -> bool:
         if not self.config.ca_cert_path:
             return False
+
+    def _store_device_token(self, token: str) -> None:
+        cleaned = str(token).strip()
+        if len(cleaned) < 16:
+            return
+        self.config.token = cleaned
+        try:
+            manager = RemoteVoiceConfigManager()
+            manager.set_token_only(cleaned)
+        except Exception:
+            pass
         try:
             return Path(self.config.ca_cert_path).expanduser().exists()
         except Exception:

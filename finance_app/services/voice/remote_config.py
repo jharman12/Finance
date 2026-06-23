@@ -52,6 +52,14 @@ class RemoteVoiceConfigManager:
             self._generate_token()
         return self._token_path.read_text().strip()
 
+    def set_token_only(self, token: str) -> None:
+        """Persist a provided auth token (for enrolled per-device credentials)."""
+        cleaned = str(token).strip()
+        if len(cleaned) < 16:
+            raise ValueError("Token must be at least 16 characters.")
+        self._token_path.write_text(cleaned)
+        self._token_path.chmod(0o600)
+
     def _generate_tls_certificate(self, device_name: str) -> None:
         """Generate self-signed TLS certificate using OpenSSL or Python."""
         try:

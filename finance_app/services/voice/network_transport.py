@@ -5,6 +5,7 @@ import hashlib
 import hmac
 import json
 import os
+import secrets
 import socket
 import socketserver
 import ssl
@@ -105,6 +106,9 @@ class RemoteAudioServer:
         # Phase 3: Session resumption tracking for persistent connections
         self._session_lock = threading.Lock()
         self._active_sessions: dict[str, SessionResumption] = {}  # connection_id -> SessionResumption
+        self._device_tokens_lock = threading.Lock()
+        self._device_tokens_path = Path.home() / ".finance-voice" / "paired-device-tokens.json"
+        self._device_tokens: dict[str, str] = self._load_device_tokens()
 
         self.on_packet: Callable[[RemoteAudioPacket], None] | None = None
         self.on_status: Callable[[str], None] | None = None
@@ -156,6 +160,46 @@ class RemoteAudioServer:
             stale = [cid for cid, s in self._active_sessions.items() if s.is_stale()]
             for cid in stale:
                 del self._active_sessions[cid]
+
+    def _load_device_tokens(self) -> dict[str, str]:
+        path = self._device_tokens_path
+        try:
+            if not path.exists():
+                return {}
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(payload, dict):
+                return {}
+            loaded: dict[str, str] = {}
+            for key, value in payload.items():
+                source = str(key).strip()
+                token = str(value).strip()
+                if source and len(token) >= 16:
+                    loaded[source] = token
+            return loaded
+        except Exception:
+            return {}
+
+    def _save_device_tokens(self) -> None:
+        path = self._device_tokens_path
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(self._device_tokens, ensure_ascii=True, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+
+    def _get_device_token(self, source_id: str) -> str:
+        with self._device_tokens_lock:
+            return self._device_tokens.get(source_id, "")
+
+    def _issue_device_token(self, source_id: str) -> str:
+        with self._device_tokens_lock:
+            existing = self._device_tokens.get(source_id, "")
+            if len(existing) >= 16:
+                return existing
+            token = secrets.token_urlsafe(32)
+            self._device_tokens[source_id] = token
+            self._save_device_tokens()
+            return token
 
     def start(self) -> None:
         if self._thread is not None and self._thread.is_alive():
@@ -259,27 +303,52 @@ class RemoteAudioServer:
                         if not source_id_candidate:
                             outer._emit_error("Remote audio hello missing source_id.")
                             return
-                        if not hmac.compare_digest(token, outer.auth_token):
-                            outer._emit_diagnostic(event="auth_rejected", source_id=source_id_candidate)
-                            outer._debug_log(f"Auth rejected for source_id={source_id_candidate}")
-                            return
-
                         source_id = source_id_candidate
-                        authenticated = True
-                        outer._emit_diagnostic(event="client_authenticated", source_id=source_id, tls=tls_enabled)
-                        outer._debug_log(f"Client authenticated source_id={source_id}, tls={tls_enabled}")
 
                         # Check pairing code if present (Phase 2: include session_id)
                         pairing_verified = False
+                        enrollment_required = False
+                        auth_mode = ""
+                        issued_device_token = ""
                         pairing_code = str(msg.get("pairing_code", "")).strip()
                         pairing_session_id = str(msg.get("pairing_session_id", "")).strip()  # Phase 2
                         session_validation_reason = ""  # Phase 2: diagnostic reason
+
+                        pairing_required = False
+                        pairing_state = None
+                        if outer.pairing_manager is not None and hasattr(outer.pairing_manager, "is_pairing"):
+                            try:
+                                pairing_required = bool(outer.pairing_manager.is_pairing())
+                            except Exception:
+                                pairing_required = False
+                        if outer.pairing_manager is not None and hasattr(outer.pairing_manager, "get_pairing_state"):
+                            try:
+                                pairing_state = outer.pairing_manager.get_pairing_state()
+                            except Exception:
+                                pairing_state = None
+
+                        # Phase 4 auth order:
+                        # 1) enrolled per-device token
+                        # 2) legacy shared token (for compatibility during migration)
+                        # 3) pairing-window enrollment using pairing code/session
+                        device_token = outer._get_device_token(source_id)
+                        token_valid_device = bool(device_token and token and hmac.compare_digest(token, device_token))
+                        token_valid_shared = bool(token and hmac.compare_digest(token, outer.auth_token))
+
+                        if token_valid_device:
+                            authenticated = True
+                            auth_mode = "device_token"
+                        elif token_valid_shared:
+                            authenticated = True
+                            auth_mode = "shared_token"
+
                         outer._debug_log(
                             "Hello received "
                             f"source_id={source_id}, pairing_code_present={bool(pairing_code)}, "
                             f"session_id_present={bool(pairing_session_id)}"
                         )
-                        if pairing_code and outer.pairing_manager is not None:
+
+                        if not authenticated and pairing_code and outer.pairing_manager is not None:
                             if hasattr(outer.pairing_manager, 'verify_pairing_code'):
                                 # Phase 2: Pass session_id to verify_pairing_code for session validation
                                 pairing_verified = outer.pairing_manager.verify_pairing_code(
@@ -301,15 +370,49 @@ class RemoteAudioServer:
                                         session_validation_reason = "pairing_code_mismatch"
                                     else:
                                         session_validation_reason = "unknown"
+                                else:
+                                    authenticated = True
+                                    enrollment_required = True
+                                    auth_mode = "pairing_enrollment"
+                                    issued_device_token = outer._issue_device_token(source_id)
                                 
                                 outer._debug_log(f"Pairing code verification for {source_id}: {pairing_verified} ({session_validation_reason})")
 
-                        pairing_required = False
-                        if outer.pairing_manager is not None and hasattr(outer.pairing_manager, "is_pairing"):
+                        if not authenticated:
+                            # When pairing is active for this source, return pairing hint instead
+                            # of hard-close so remote UI can complete enrollment flow.
+                            pairing_hint = ""
+                            pairing_hint_session = ""
+                            if (
+                                pairing_required
+                                and pairing_state is not None
+                                and not pairing_state.is_session_expired()
+                                and pairing_state.source_id == source_id
+                            ):
+                                pairing_hint = pairing_state.expected_pairing_code
+                                pairing_hint_session = pairing_state.pairing_session_id
+
+                            outer._emit_diagnostic(event="auth_rejected", source_id=source_id)
+                            outer._debug_log(f"Auth rejected for source_id={source_id}")
+
                             try:
-                                pairing_required = bool(outer.pairing_manager.is_pairing())
+                                hello_ack = {
+                                    "type": "hello_ack",
+                                    "paired": False,
+                                    "pairing_required": pairing_required,
+                                    "auth_rejected": True,
+                                    "pairing_code_hint": pairing_hint,
+                                    "pairing_session_id": pairing_hint_session,
+                                    "server_token_fingerprint": _token_fingerprint(outer.auth_token),
+                                }
+                                self.wfile.write((json.dumps(hello_ack, ensure_ascii=True) + "\n").encode("utf-8"))
+                                self.wfile.flush()
                             except Exception:
-                                pairing_required = False
+                                pass
+                            return
+
+                        outer._emit_diagnostic(event="client_authenticated", source_id=source_id, tls=tls_enabled, auth_mode=auth_mode)
+                        outer._debug_log(f"Client authenticated source_id={source_id}, tls={tls_enabled}, auth_mode={auth_mode}")
 
                         outer._emit_diagnostic(
                             event="pairing_evaluated",
@@ -337,6 +440,9 @@ class RemoteAudioServer:
                                 "connection_id": session.connection_id,  # Phase 3
                                 "paired": pairing_verified,
                                 "pairing_required": pairing_required,
+                                "enrollment_completed": enrollment_required,
+                                "device_token_issued": issued_device_token,
+                                "pairing_session_id": pairing_session_id,
                                 "server_token_fingerprint": _token_fingerprint(outer.auth_token),
                             }
                             self.wfile.write(
@@ -500,27 +606,12 @@ class RemoteAudioServer:
             self._emit_error(f"Remote audio server failed: {exc}")
 
     def _build_discovery_properties(self, advertised_tls_server_name: str) -> dict[str, str]:
-        """Build discovery metadata.
-
-        Phase 4 hardening: secrets are excluded unless legacy bootstrap is
-        explicitly enabled for compatibility with pre-mTLS pairing flow.
-        """
+        """Build discovery metadata (Phase 4): endpoint-only, no secrets."""
         endpoint = f"{advertised_tls_server_name}:{self.bound_port}"
-        properties = {
+        return {
             "tls_server_name": advertised_tls_server_name,
             "endpoint": endpoint,
         }
-        bootstrap_enabled = os.getenv("FINANCE_APP_REMOTE_MDNS_TOKEN_BOOTSTRAP", "1").strip().lower() in {
-            "1",
-            "true",
-            "yes",
-            "on",
-        }
-        if bootstrap_enabled:
-            # Compatibility mode: allows existing remote senders to acquire the
-            # shared token for initial pairing/auth before per-device keys exist.
-            properties["auth_token"] = self.auth_token
-        return properties
 
     def _emit_status(self, message: str) -> None:
         if self.on_status:
