@@ -1,7 +1,6 @@
-"""Tests for Phase 2: Robust pairing protocol with session IDs and HMAC codes."""
+"""Tests for Phase 2: Robust pairing protocol with session-based validation."""
 
 import hashlib
-import hmac
 import time
 import unittest
 
@@ -68,7 +67,7 @@ class TestPairingCodeGeneratorWithSessionId(unittest.TestCase):
         code = PairingCodeGenerator.generate(auth_token, source_id, "")
 
         # Verify code (server does this, with different session_ids)
-        # Both should succeed because code doesn't depend on session_id
+        # All should succeed because code doesn't depend on session_id
         self.assertTrue(PairingCodeGenerator.verify(code.code, auth_token, source_id, "session-1"))
         self.assertTrue(PairingCodeGenerator.verify(code.code, auth_token, source_id, "session-2"))
         self.assertTrue(PairingCodeGenerator.verify(code.code, auth_token, source_id, ""))
@@ -217,67 +216,97 @@ class TestRemoteVoicePairingManagerWithSessionId(unittest.TestCase):
 
 
 class TestPhase2Protocol(unittest.TestCase):
-    """Integration tests for Phase 2 pairing protocol."""
+    """Integration tests for Phase 2 pairing protocol with session-based validation."""
 
     def test_complete_phase2_pairing_flow(self) -> None:
-        """Test complete Phase 2 pairing flow with session IDs."""
-        # Step 1: User clicks "Pair Selected Device" in dialog
+        """Test complete Phase 2 pairing flow with session IDs for validation only."""
+        # Step 1: User clicks "Pair Selected Device" in dialog (receiver side)
         auth_token = "server-token-1234567890"
         source_id = "remote-device-1"
         session_id = "uuid-12345-67890"
 
-        # Step 2: Dialog generates pairing code with session_id
-        pairing_code = PairingCodeGenerator.generate(auth_token, source_id, session_id).code
+        # Step 2: Dialog generates pairing code (deterministic, not session-dependent)
+        # Remote device can independently compute the same code
+        pairing_code = PairingCodeGenerator.generate(auth_token, source_id, "").code
 
-        # Step 3: Manager starts waiting for pairing
+        # Step 3: Manager starts waiting for pairing (stores session_id for validation)
         manager = RemoteVoicePairingManager()
         manager.start_pairing(source_id, pairing_code, session_id)
 
-        # Step 4: Remote device connects with hello message (session_id in payload)
-        # (simulated - in real flow, network_transport validates)
+        # Step 4: Remote device connects with hello message
+        # Remote device also computed the same code independently (deterministic)
+        # Remote device includes session_id from broadcast or other discovery mechanism
+        remote_code = PairingCodeGenerator.generate(auth_token, source_id, "").code
+        self.assertEqual(remote_code, pairing_code)  # Both compute same code
 
         # Step 5: Manager verifies pairing code and session_id
         verified = manager.verify_pairing_code(source_id, pairing_code, session_id)
         self.assertTrue(verified)
 
-        # Step 6: Verify that wrong session_id fails
-        verified_wrong = manager.verify_pairing_code(source_id, pairing_code, "wrong-session")
-        self.assertFalse(verified_wrong)
+        # Step 6: Verify that wrong session_id fails (session validation)
+        verified_wrong_session = manager.verify_pairing_code(
+            source_id, pairing_code, "wrong-session"
+        )
+        # Note: This will fail because the session_id doesn't match
+        self.assertFalse(verified_wrong_session)
 
-    def test_session_id_prevents_cross_session_pairing(self) -> None:
-        """Test that session_id prevents accidental cross-session pairing."""
+    def test_session_id_validates_current_pairing_window(self) -> None:
+        """Test that session_id ensures pairing happens in current window."""
         auth_token = "server-token"
 
-        # Scenario: User initiates pairing attempt 1
+        # Scenario: User initiates pairing attempt 1 with session_id_A
         manager = RemoteVoicePairingManager()
-        manager.start_pairing("device-1", "ABC123", "session-attempt-1")
+        session_id_current = "session-current-uuid"
+        pairing_code = PairingCodeGenerator.generate(auth_token, "device-1", "").code
+        manager.start_pairing("device-1", pairing_code, session_id_current)
 
-        # Scenario: Device from a DIFFERENT pairing attempt sends code
-        # (e.g., stale cached code from 10 minutes ago)
-        old_code = PairingCodeGenerator.generate(auth_token, "device-1", "session-attempt-old")
+        # Scenario: Device tries to use an old session_id from a previous pairing
+        old_session_id = "session-old-uuid"
+        verified_old_session = manager.verify_pairing_code("device-1", pairing_code, old_session_id)
+        self.assertFalse(verified_old_session)  # Rejected due to session_id mismatch
 
-        # Verification should fail because session_id doesn't match
-        verified = manager.verify_pairing_code("device-1", old_code.code, "session-attempt-old")
-        self.assertFalse(verified)  # Session doesn't match current one
+        # But with correct current session_id, it succeeds
+        verified_current = manager.verify_pairing_code(
+            "device-1", pairing_code, session_id_current
+        )
+        self.assertTrue(verified_current)
 
     def test_session_timeout_prevents_replay_attacks(self) -> None:
         """Test that 60-second session timeout prevents replay attacks."""
-        # Create an old pairing session
+        # Create an old pairing session (expired)
         old_session_time = time.time() - 70
         manager = RemoteVoicePairingManager()
 
+        auth_token = "server-token"
+        source_id = "device-1"
+        pairing_code = PairingCodeGenerator.generate(auth_token, source_id, "").code
+
         state = PairingState(
-            source_id="device-1",
-            expected_pairing_code="ABC123",
-            pairing_session_id="session-old",
+            source_id=source_id,
+            expected_pairing_code=pairing_code,
+            pairing_session_id="old-session-uuid",
             session_created_at=old_session_time,
             session_timeout_seconds=60.0,
         )
         manager._pairing_state = state
 
         # Even with correct code and session_id, verification fails due to expiration
-        result = manager.verify_pairing_code("device-1", "ABC123", "session-old")
-        self.assertFalse(result)
+        result = manager.verify_pairing_code(source_id, pairing_code, "old-session-uuid")
+        self.assertFalse(result)  # Rejected: session expired
+
+    def test_remote_device_can_display_code_independently(self) -> None:
+        """Test that remote device can independently compute and display pairing code."""
+        auth_token = "shared-token"
+        source_id = "remote-sender-1"
+
+        # Receiver generates code
+        receiver_code = PairingCodeGenerator.generate(auth_token, source_id, "").code
+
+        # Remote device independently generates code (no session_id needed for code)
+        remote_code = PairingCodeGenerator.generate(auth_token, source_id, "").code
+
+        # Codes must match for user verification
+        self.assertEqual(receiver_code, remote_code)
 
 
 if __name__ == "__main__":
