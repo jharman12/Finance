@@ -420,6 +420,18 @@ class RemoteAudioServer:
                             server_token_fingerprint=_token_fingerprint(outer.auth_token),
                             received_token_fingerprint=_token_fingerprint(token),
                         )
+
+                        pairing_hint = ""
+                        pairing_hint_session = ""
+                        if (
+                            pairing_required
+                            and pairing_state is not None
+                            and not pairing_state.is_session_expired()
+                            and pairing_state.source_id == source_id
+                        ):
+                            pairing_hint = pairing_state.expected_pairing_code
+                            pairing_hint_session = pairing_state.pairing_session_id
+
                         outer._debug_log(
                             "Sending hello_ack "
                             f"source_id={source_id}, paired={pairing_verified}, pairing_required={pairing_required}"
@@ -437,7 +449,8 @@ class RemoteAudioServer:
                                 "pairing_required": pairing_required,
                                 "enrollment_completed": enrollment_required,
                                 "device_token_issued": issued_device_token,
-                                "pairing_session_id": pairing_session_id,
+                                "pairing_code_hint": pairing_hint,
+                                "pairing_session_id": pairing_hint_session,
                                 "server_token_fingerprint": _token_fingerprint(outer.auth_token),
                             }
                             self.wfile.write(
