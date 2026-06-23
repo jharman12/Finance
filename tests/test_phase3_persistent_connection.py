@@ -321,6 +321,47 @@ class TestRemoteWakeStreamSenderPersistentWiring(unittest.TestCase):
             fake_transport.send_audio.assert_called_once_with(b"audio-frame-1")
             self.assertEqual(sender._stream_started_at > 0.0, True)
 
+    def test_pairing_ack_enters_wake_listening_without_persistent_start(self) -> None:
+        """Test that pairing confirmation does not eagerly start persistent TLS."""
+        config = SenderConfig(
+            host="localhost",
+            port=9999,
+            token="test-token-1234567890",
+            source_id="test-device",
+            ca_cert_path="",
+            tls_server_name=None,
+            wake_phrase="hey steven",
+            wake_mode="phrase_vosk",
+            vosk_model_path="models/vosk-model-en-us-0.22-lgraph",
+            openwakeword_model_path=None,
+            wake_threshold=0.5,
+            sample_rate=16000,
+            blocksize=1600,
+            preroll_ms=2000,
+            post_wake_grace_ms=1200,
+            max_stream_seconds=12.0,
+            cooldown_seconds=0.8,
+            endpoint_min_speech_ms=300,
+            endpoint_silence_ms=700,
+            endpoint_max_utterance_ms=12000,
+            energy_threshold=450.0,
+        )
+
+        with patch.object(RemoteWakeStreamSender, "_build_wake_detector", return_value=MagicMock()), patch.object(
+            RemoteWakeStreamSender,
+            "_connect_pair_probe",
+        ) as mock_probe, patch.object(RemoteWakeStreamSender, "_ensure_persistent_connection") as mock_persistent:
+            mock_connection = MagicMock()
+            mock_connection.pairing_required = True
+            mock_connection.paired_acknowledged = True
+            mock_probe.return_value = mock_connection
+
+            sender = RemoteWakeStreamSender(config)
+            sender._attempt_pair_probe(force=True)
+
+            self.assertTrue(sender._paired_with_main)
+            mock_persistent.assert_not_called()
+
 
 class TestPhase3Protocol(unittest.TestCase):
     """Integration tests for Phase 3 persistent connection protocol."""

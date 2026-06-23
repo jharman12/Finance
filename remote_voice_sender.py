@@ -504,10 +504,6 @@ class RemoteWakeStreamSender:
             self._waiting_for_pair_notice_logged = False
             self._pairing_code = None
             self._last_announced_pairing_code = None
-            try:
-                self._ensure_persistent_connection()
-            except Exception as exc:
-                _log(f"Persistent connection could not be started after pairing: {exc}")
             _log(f"Paired with main device at {self.config.host}:{self.config.port}. Waiting for wake phrase.")
             return
 
@@ -550,10 +546,6 @@ class RemoteWakeStreamSender:
         self._waiting_for_pair_notice_logged = False
         self._pairing_code = None
         self._last_announced_pairing_code = None
-        try:
-            self._ensure_persistent_connection()
-        except Exception as exc:
-            _log(f"Persistent connection could not be started after pairing: {exc}")
         _log(f"Paired with main device at {self.config.host}:{self.config.port}. Waiting for wake phrase.")
 
     def _connect_pair_probe(self, pairing_code: str) -> SecureRemoteAudioConnection | None:
