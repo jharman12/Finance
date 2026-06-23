@@ -446,11 +446,7 @@ class RemoteAudioServer:
             port=self.bound_port,
             device_name=self._discovery_name,
             role="voice-receiver",
-            extra_properties={
-                "auth_token": self.auth_token,
-                "tls_cert_path": self.tls_cert_path or "",
-                "tls_server_name": advertised_tls_server_name,
-            },
+            extra_properties=self._build_discovery_properties(advertised_tls_server_name),
         )
         discovery_started = False
         try:
@@ -502,6 +498,14 @@ class RemoteAudioServer:
             server.serve_forever(poll_interval=0.2)
         except (OSError, socket.error) as exc:
             self._emit_error(f"Remote audio server failed: {exc}")
+
+    def _build_discovery_properties(self, advertised_tls_server_name: str) -> dict[str, str]:
+        """Build discovery metadata without exposing secrets (Phase 4)."""
+        endpoint = f"{advertised_tls_server_name}:{self.bound_port}"
+        return {
+            "tls_server_name": advertised_tls_server_name,
+            "endpoint": endpoint,
+        }
 
     def _emit_status(self, message: str) -> None:
         if self.on_status:

@@ -409,13 +409,9 @@ class RemoteWakeStreamSender:
             self.config.host = device.host
         if device.port:
             self.config.port = int(device.port)
-        discovered_token = device.properties.get("auth_token", "").strip()
-        if discovered_token:
-            self.config.token = discovered_token
-            _debug(
-                "Pairing diagnostic: discovered receiver token fingerprint="
-                f"{_token_fingerprint(self.config.token)}"
-            )
+        # Phase 4: Never ingest auth secrets from mDNS properties.
+        if device.properties.get("auth_token", "").strip():
+            _debug("Ignoring deprecated auth_token value from mDNS payload.")
         discovered_tls_server_name = device.properties.get("tls_server_name", "").strip()
         if discovered_tls_server_name:
             self.config.tls_server_name = discovered_tls_server_name

@@ -93,6 +93,15 @@ class VoiceRemoteTransportTests(unittest.TestCase):
         self.assertEqual(len(self.received), 1)
         self.assertEqual(self.received[0].seq_no, 2)
 
+    def test_phase4_discovery_properties_exclude_secrets(self) -> None:
+        server = RemoteAudioServer(host="127.0.0.1", port=45881, auth_token="1234567890abcdef")
+        properties = server._build_discovery_properties("192.168.1.10")
+
+        self.assertEqual(properties.get("tls_server_name"), "192.168.1.10")
+        self.assertEqual(properties.get("endpoint"), "192.168.1.10:45881")
+        self.assertNotIn("auth_token", properties)
+        self.assertNotIn("tls_cert_path", properties)
+
 
 if __name__ == "__main__":
     unittest.main()
