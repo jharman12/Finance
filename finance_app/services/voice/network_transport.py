@@ -327,20 +327,15 @@ class RemoteAudioServer:
                             except Exception:
                                 pairing_state = None
 
-                        # Phase 4 auth order:
+                        # Phase 4 strict auth order:
                         # 1) enrolled per-device token
-                        # 2) legacy shared token (for compatibility during migration)
-                        # 3) pairing-window enrollment using pairing code/session
+                        # 2) pairing-window enrollment using pairing code/session
                         device_token = outer._get_device_token(source_id)
                         token_valid_device = bool(device_token and token and hmac.compare_digest(token, device_token))
-                        token_valid_shared = bool(token and hmac.compare_digest(token, outer.auth_token))
 
                         if token_valid_device:
                             authenticated = True
                             auth_mode = "device_token"
-                        elif token_valid_shared:
-                            authenticated = True
-                            auth_mode = "shared_token"
 
                         outer._debug_log(
                             "Hello received "

@@ -63,6 +63,7 @@ class VoiceRemoteTransportTests(unittest.TestCase):
 
     def test_accepts_authenticated_audio_packet(self) -> None:
         server = RemoteAudioServer(host="127.0.0.1", port=0, auth_token="1234567890abcdef")
+        server._device_tokens["node-1"] = "device-token-1234567890abcdef"
         server.on_packet = self.received.append
         server.start()
         try:
@@ -71,7 +72,7 @@ class VoiceRemoteTransportTests(unittest.TestCase):
                 "127.0.0.1",
                 server.bound_port,
                 [
-                    {"type": "hello", "source_id": "node-1", "token": "1234567890abcdef"},
+                    {"type": "hello", "source_id": "node-1", "token": "device-token-1234567890abcdef"},
                     {
                         "type": "audio",
                         "seq_no": 1,
@@ -114,6 +115,7 @@ class VoiceRemoteTransportTests(unittest.TestCase):
 
     def test_rejects_non_monotonic_sequence(self) -> None:
         server = RemoteAudioServer(host="127.0.0.1", port=0, auth_token="1234567890abcdef")
+        server._device_tokens["node-1"] = "device-token-1234567890abcdef"
         server.on_packet = self.received.append
         server.start()
         try:
@@ -123,7 +125,7 @@ class VoiceRemoteTransportTests(unittest.TestCase):
                 "127.0.0.1",
                 server.bound_port,
                 [
-                    {"type": "hello", "source_id": "node-1", "token": "1234567890abcdef"},
+                    {"type": "hello", "source_id": "node-1", "token": "device-token-1234567890abcdef"},
                     {"type": "audio", "seq_no": 2, "audio_b64": audio_a},
                     {"type": "audio", "seq_no": 1, "audio_b64": audio_b},
                 ],
@@ -134,6 +136,29 @@ class VoiceRemoteTransportTests(unittest.TestCase):
 
         self.assertEqual(len(self.received), 1)
         self.assertEqual(self.received[0].seq_no, 2)
+
+    def test_rejects_legacy_shared_token_without_enrollment(self) -> None:
+        server = RemoteAudioServer(host="127.0.0.1", port=0, auth_token="1234567890abcdef")
+        server.on_packet = self.received.append
+        server.start()
+        try:
+            self._send(
+                "127.0.0.1",
+                server.bound_port,
+                [
+                    {"type": "hello", "source_id": "node-1", "token": "1234567890abcdef"},
+                    {
+                        "type": "audio",
+                        "seq_no": 1,
+                        "audio_b64": base64.b64encode(b"abc").decode("ascii"),
+                    },
+                ],
+            )
+            time.sleep(0.1)
+        finally:
+            server.stop()
+
+        self.assertEqual(self.received, [])
 
     def test_phase4_discovery_properties_exclude_secrets(self) -> None:
         server = RemoteAudioServer(host="127.0.0.1", port=45881, auth_token="1234567890abcdef")
