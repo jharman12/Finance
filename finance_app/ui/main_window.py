@@ -3039,9 +3039,41 @@ class MainWindow(QMainWindow):
             return
 
         devices = self.app_controller.list_paired_remote_devices(active_only=True)
-        table.setRowCount(len(devices))
-        for row, device in enumerate(devices):
-            source_id = str(device.source_id)
+        device_map: dict[str, PairedRemoteDevice] = {
+            str(device.source_id).strip(): device
+            for device in devices
+            if str(device.source_id).strip()
+        }
+
+        # Include runtime-observed sources so authenticated remotes are always visible
+        # even if DB state is stale or missing.
+        source_ids = list(device_map.keys())
+        for runtime_source_id in self._known_remote_device_runtime.keys():
+            cleaned_runtime_source_id = str(runtime_source_id).strip()
+            if (
+                cleaned_runtime_source_id
+                and cleaned_runtime_source_id != "(unknown)"
+                and cleaned_runtime_source_id not in device_map
+            ):
+                source_ids.append(cleaned_runtime_source_id)
+
+        def _sort_key(source_id: str) -> datetime:
+            runtime = self._known_remote_device_runtime.get(source_id, {})
+            last_seen = runtime.get("last_seen_at")
+            if isinstance(last_seen, datetime):
+                return last_seen
+            device = device_map.get(source_id)
+            if device is not None and isinstance(device.last_connected_at, datetime):
+                return device.last_connected_at
+            if device is not None and isinstance(device.paired_at, datetime):
+                return device.paired_at
+            return datetime.min
+
+        source_ids.sort(key=_sort_key, reverse=True)
+
+        table.setRowCount(len(source_ids))
+        for row, source_id in enumerate(source_ids):
+            device = device_map.get(source_id)
             runtime = self._known_remote_device_runtime.get(source_id, {})
 
             auth_mode = str(runtime.get("auth_mode", "")).strip()
@@ -3049,9 +3081,12 @@ class MainWindow(QMainWindow):
             connected = bool(runtime.get("connected", False))
             disconnect_reason = str(runtime.get("disconnect_reason", "")).strip()
 
-            pair_auth = "Paired"
+            pair_auth = "Paired" if device is not None else "Observed"
             if authenticated:
-                pair_auth = f"Paired + Authenticated ({auth_mode or 'token'})"
+                if device is not None:
+                    pair_auth = f"Paired + Authenticated ({auth_mode or 'token'})"
+                else:
+                    pair_auth = f"Authenticated ({auth_mode or 'token'})"
 
             connection_state = "Connected" if connected else "Disconnected"
             if disconnect_reason and not connected:
@@ -3060,12 +3095,18 @@ class MainWindow(QMainWindow):
             last_seen = runtime.get("last_seen_at")
             if isinstance(last_seen, datetime):
                 last_seen_text = last_seen.strftime("%Y-%m-%d %H:%M:%S")
-            elif device.last_connected_at is not None:
+            elif device is not None and device.last_connected_at is not None:
                 last_seen_text = device.last_connected_at.strftime("%Y-%m-%d %H:%M:%S")
             else:
                 last_seen_text = "Never"
 
-            device_item = QTableWidgetItem(str(device.device_name or source_id))
+            device_name = source_id
+            if device is not None and str(device.device_name).strip():
+                device_name = str(device.device_name).strip()
+            elif str(runtime.get("device_name", "")).strip():
+                device_name = str(runtime.get("device_name", "")).strip()
+
+            device_item = QTableWidgetItem(device_name)
             source_item = QTableWidgetItem(source_id)
             source_item.setData(Qt.UserRole, source_id)
             pair_item = QTableWidgetItem(pair_auth)
@@ -4802,15 +4843,42 @@ class MainWindow(QMainWindow):
             source_id = str(payload.get("source_id", "")).strip() or "(unknown)"
             auth_mode = str(payload.get("auth_mode", "")).strip() or "unknown"
             now = datetime.now()
+
+            # Keep paired-device persistence aligned with runtime auth state so the
+            # known-devices UI can always expose and forget active token-auth devices.
+            if source_id != "(unknown)":
+                existing = self.app_controller.get_paired_remote_device(source_id)
+                if existing is None:
+                    self.app_controller.save_paired_remote_device(
+                        PairedRemoteDevice(
+                            id=None,
+                            source_id=source_id,
+                            device_name=source_id,
+                            host_ip="",
+                            port=1,
+                            role="remote-sender",
+                            protocol_version="1",
+                            paired_at=now,
+                            last_connected_at=now,
+                            is_active=True,
+                        )
+                    )
+                else:
+                    existing.last_connected_at = now
+                    existing.is_active = True
+                    if not str(existing.device_name).strip():
+                        existing.device_name = source_id
+                    self.app_controller.save_paired_remote_device(existing)
+
             self._known_remote_device_runtime[source_id] = {
                 "authenticated": True,
                 "connected": True,
                 "auth_mode": auth_mode,
+                "device_name": source_id,
                 "last_seen_at": now,
                 "last_event_at": now,
                 "disconnect_reason": "",
             }
-            self.app_controller.update_paired_device_connection_time(source_id)
             self._refresh_known_devices_table()
             service_name = f"{source_id}"
             self._discovered_voice_devices[service_name] = {
