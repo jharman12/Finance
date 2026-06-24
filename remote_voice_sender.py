@@ -530,7 +530,7 @@ class RemoteWakeStreamSender:
         )
         connection.close()
 
-        if paired_acknowledged:
+        if paired_acknowledged and not pairing_required:
             if connection.device_token_issued:
                 self._store_device_token(connection.device_token_issued)
             self._paired_with_main = True

@@ -995,3 +995,10 @@
 {"ts": "2026-06-24T21:26:23.610308+00:00", "event": "continuation_window_started", "utterance_id": 1, "seconds": 0.7}
 {"ts": "2026-06-24T21:26:23.720392+00:00", "event": "continuation_resumed", "utterance_id": 1}
 {"ts": "2026-06-24T21:26:25.013540+00:00", "event": "continuation_window_started", "utterance_id": 1, "seconds": 0.7}
+{"ts": "2026-06-24T21:30:14.542234+00:00", "event": "voice_stopped"}
+{"ts": "2026-06-24T21:30:37.575139+00:00", "event": "remote_capture_start", "source_id": "JenkinsEnvy", "utterance_id": 1}
+{"ts": "2026-06-24T21:30:41.552537+00:00", "event": "continuation_window_started", "utterance_id": 1, "seconds": 0.7}
+{"ts": "2026-06-24T21:30:42.000255+00:00", "event": "continuation_resumed", "utterance_id": 1}
+{"ts": "2026-06-24T21:30:42.880723+00:00", "event": "continuation_window_started", "utterance_id": 1, "seconds": 0.7}
+{"ts": "2026-06-24T21:30:49.773173+00:00", "event": "voice_stopped"}
+{"ts": "2026-06-24T21:34:26.710690+00:00", "event": "voice_stopped"}

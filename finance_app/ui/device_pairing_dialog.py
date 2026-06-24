@@ -246,6 +246,11 @@ class DevicePairingDialog(QDialog):
         # arrives after dialog was closed), do nothing.
         if self._finalized:
             return
+        selected = self._selected_device
+        if selected is None:
+            return
+        if str(selected.source_id).strip() != str(source_id).strip():
+            return
         self._finalized = True
         # Explicitly stop and disconnect the timer before accept() so that the
         # QTimer is inert before any possible GC, breaking the reference cycle.
