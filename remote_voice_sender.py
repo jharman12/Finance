@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Callable
 
 from finance_app.services.voice.discovery import (
+    RECEIVER_SERVICE_TYPES,
     RemoteVoiceDiscoveryBrowser,
     RemoteVoiceDiscoveryDevice,
     RemoteVoiceDiscoveryPublisher,
@@ -330,7 +331,7 @@ class RemoteWakeStreamSender:
                 _log(hint)
             return 2
 
-        self._discovery_browser = RemoteVoiceDiscoveryBrowser()
+        self._discovery_browser = RemoteVoiceDiscoveryBrowser(service_type=RECEIVER_SERVICE_TYPES)
         if self._discovery_browser.start(on_device=self._handle_discovered_receiver, on_diagnostic=self._handle_discovery_diagnostic):
             _log("Browsing the local network for the Finance Voice Receiver.")
         elif not self.config.host:

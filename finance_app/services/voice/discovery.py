@@ -5,9 +5,11 @@ import socket
 from dataclasses import dataclass
 from typing import Any, Callable
 
-SERVICE_TYPE_RECEIVER = "_finance-voice._tcp.local."
+SERVICE_TYPE_RECEIVER = "_fvoice._tcp.local."
+LEGACY_SERVICE_TYPE_RECEIVER = "_finance-voice._tcp.local."
 SERVICE_TYPE_SENDER = "_fvoice-sender._tcp.local."
-SERVICE_TYPE = SERVICE_TYPE_RECEIVER  # Default for backward compatibility
+SERVICE_TYPE = SERVICE_TYPE_RECEIVER
+RECEIVER_SERVICE_TYPES = (SERVICE_TYPE_RECEIVER, LEGACY_SERVICE_TYPE_RECEIVER)
 
 _zeroconf_module = None
 try:
@@ -173,10 +175,13 @@ class RemoteVoiceDiscoveryPublisher:
 
 
 class RemoteVoiceDiscoveryBrowser:
-    def __init__(self, service_type: str = SERVICE_TYPE) -> None:
-        self.service_type = service_type
+    def __init__(self, service_type: str | tuple[str, ...] = SERVICE_TYPE) -> None:
+        if isinstance(service_type, tuple):
+            self.service_types = service_type
+        else:
+            self.service_types = (service_type,)
         self._zeroconf: Any = None
-        self._browser: Any = None
+        self._browsers: list[Any] = []
         self._on_device: Callable[[RemoteVoiceDiscoveryDevice], None] | None = None
         self._on_diagnostic: Callable[[dict[str, object]], None] | None = None
 
@@ -194,15 +199,19 @@ class RemoteVoiceDiscoveryBrowser:
         self._on_device = on_device
         self._on_diagnostic = on_diagnostic
         self._zeroconf = Zeroconf()
-        self._browser = ServiceBrowser(self._zeroconf, self.service_type, handlers=[self._handle_service_state_change])
+        self._browsers = [
+            ServiceBrowser(self._zeroconf, service_type, handlers=[self._handle_service_state_change])
+            for service_type in self.service_types
+        ]
         if self._on_diagnostic is not None:
-            self._on_diagnostic({"event": "mdns_browser_started", "service_type": self.service_type})
+            for service_type in self.service_types:
+                self._on_diagnostic({"event": "mdns_browser_started", "service_type": service_type})
         return True
 
     def stop(self) -> None:
         zeroconf = self._zeroconf
         self._zeroconf = None
-        self._browser = None
+        self._browsers = []
         self._on_device = None
         self._on_diagnostic = None
 
