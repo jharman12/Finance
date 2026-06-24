@@ -2,8 +2,7 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$Host,
 
-    [Parameter(Mandatory = $true)]
-    [string]$RemoteAudioToken,
+    [string]$RemoteAudioToken = "",
 
     [Parameter(Mandatory = $true)]
     [string]$CaCertPath,
@@ -25,8 +24,8 @@ $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent (Split-Path -Parent $PSCommandPath)
 Set-Location $repoRoot
 
-if ([string]::IsNullOrWhiteSpace($RemoteAudioToken) -or $RemoteAudioToken.Length -lt 16) {
-    throw "Remote audio token must be at least 16 characters."
+if (-not [string]::IsNullOrWhiteSpace($RemoteAudioToken) -and $RemoteAudioToken.Length -lt 16) {
+    throw "Remote audio token must be at least 16 characters when provided."
 }
 if (-not (Test-Path -Path $CaCertPath)) {
     throw "CA cert file not found: $CaCertPath"
@@ -42,7 +41,11 @@ if (-not (Test-Path -Path $pythonExe)) {
 
 $env:FINANCE_APP_REMOTE_AUDIO_HOST = $Host
 $env:FINANCE_APP_REMOTE_AUDIO_PORT = "$Port"
-$env:FINANCE_APP_REMOTE_AUDIO_TOKEN = $RemoteAudioToken
+if (-not [string]::IsNullOrWhiteSpace($RemoteAudioToken)) {
+    $env:FINANCE_APP_REMOTE_AUDIO_TOKEN = $RemoteAudioToken
+} else {
+    Remove-Item Env:FINANCE_APP_REMOTE_AUDIO_TOKEN -ErrorAction SilentlyContinue
+}
 $env:FINANCE_APP_REMOTE_AUDIO_CA_CERT = $CaCertPath
 $env:FINANCE_APP_REMOTE_AUDIO_TLS_SERVER_NAME = $(if ([string]::IsNullOrWhiteSpace($TlsServerName)) { $Host } else { $TlsServerName })
 $env:FINANCE_APP_REMOTE_SOURCE_ID = $SourceId

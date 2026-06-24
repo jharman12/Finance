@@ -616,6 +616,10 @@ class RemoteWakeStreamSender:
     def _has_verified_receiver_cert(self) -> bool:
         if not self.config.ca_cert_path:
             return False
+        try:
+            return Path(self.config.ca_cert_path).expanduser().exists()
+        except Exception:
+            return False
 
     def _store_device_token(self, token: str) -> None:
         cleaned = str(token).strip()
@@ -625,12 +629,9 @@ class RemoteWakeStreamSender:
         try:
             manager = RemoteVoiceConfigManager()
             manager.set_token_only(cleaned)
-        except Exception:
-            pass
-        try:
-            return Path(self.config.ca_cert_path).expanduser().exists()
-        except Exception:
-            return False
+            _debug("Stored enrolled per-device token for future sessions.")
+        except Exception as exc:
+            _debug(f"Failed to persist device token: {exc}")
 
     def _open_stream(self, now: float) -> None:
         if not self.config.host:
@@ -844,10 +845,17 @@ def build_config(args: argparse.Namespace) -> SenderConfig:
     config_manager = RemoteVoiceConfigManager()
     creds = config_manager.get_credentials()
 
-    token = str(args.token).strip()
-    if len(token) < 16:
-        token = creds.auth_token
-        _log(f"Using auto-generated token from {Path.home() / '.finance-voice'}")
+    token_override = str(args.token).strip()
+    persisted_token = str(creds.auth_token).strip()
+    force_override = _bool_env("FINANCE_APP_REMOTE_TOKEN_OVERRIDE", False)
+    if force_override and len(token_override) >= 16:
+        token = token_override
+        _log("Using explicitly overridden token from FINANCE_APP_REMOTE_AUDIO_TOKEN.")
+    else:
+        token = persisted_token
+        if len(token_override) >= 16 and token_override != persisted_token:
+            _log("Ignoring FINANCE_APP_REMOTE_AUDIO_TOKEN and using persisted paired device token.")
+        _log(f"Using persisted token from {Path.home() / '.finance-voice'}")
 
     ca_cert_path = str(args.ca_cert).strip()
     if not ca_cert_path:
