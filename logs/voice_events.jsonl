@@ -961,3 +961,10 @@
 {"ts": "2026-06-23T20:43:40.990934+00:00", "event": "continuation_resumed", "utterance_id": 2}
 {"ts": "2026-06-23T20:43:42.980899+00:00", "event": "continuation_window_started", "utterance_id": 2, "seconds": 0.7}
 {"ts": "2026-06-23T20:47:24.602193+00:00", "event": "voice_stopped"}
+{"ts": "2026-06-24T20:35:15.396756+00:00", "event": "remote_capture_start", "source_id": "JenkinsEnvy", "utterance_id": 1}
+{"ts": "2026-06-24T20:35:18.670736+00:00", "event": "continuation_window_started", "utterance_id": 1, "seconds": 0.7}
+{"ts": "2026-06-24T20:35:35.708974+00:00", "event": "continuation_timeout", "utterance_id": 1, "waited_seconds": 0.7}
+{"ts": "2026-06-24T20:35:35.726003+00:00", "event": "endpoint_complete", "utterance_id": 1, "reason": "continuation_timeout", "speech_ms": 1400}
+{"ts": "2026-06-24T20:35:40.439640+00:00", "event": "command_dispatch", "utterance_id": 1, "source_id": "JenkinsEnvy", "provider": "vosk", "confidence": 0.65, "latency_ms": 4697, "used_fallback": true, "fallback_reason": "provider_error", "chars": 35}
+{"ts": "2026-06-24T20:35:40.439640+00:00", "event": "cooldown_started", "utterance_id": 1, "seconds": 0.7}
+{"ts": "2026-06-24T20:35:50.618742+00:00", "event": "voice_stopped"}

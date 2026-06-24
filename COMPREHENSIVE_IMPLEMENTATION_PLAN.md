@@ -681,8 +681,8 @@ PHASE 3 (Weeks 9-16): Advanced Features
 
 | Priority | Fix | Impact | Effort |
 |----------|-----|--------|--------|
-| 🔴 CRITICAL | Change `_finance-voice` → `_fvoice` | Prevents service registration failure | 1 line |
-| 🔴 CRITICAL | Persist device tokens | Prevent re-pairing on app restart | 100 lines |
+| ✅ DONE | Change `_finance-voice` → `_fvoice` | Prevents service registration failure | 1 line |
+| ✅ DONE | Persist device tokens | Prevent re-pairing on app restart | 100 lines |
 | 🔴 CRITICAL | Windows firewall automation | Users blocked by Windows firewall by default | 60 lines |
 | 🟠 HIGH | CLI device management | Operational control (unpair, list, rotate) | 80 lines |
 
@@ -734,11 +734,11 @@ PHASE 3 (Weeks 9-16): Advanced Features
    - [Codebase Architect output] - Architecture recommendations
 
 3. 🐛 **Fix critical bugs** (Week 1 Day 1):
-   - [ ] `_finance-voice` → `_fvoice` (1 line)
-   - [ ] Add token persistence (100 lines)
+  - [x] `_finance-voice` → `_fvoice` (1 line)
+  - [x] Add token persistence (100 lines)
    - [ ] Windows firewall automation (60 lines)
 
-4. 🏗️ **Start Phase 1 Week 1** implementation with expert guidance
+4. 🔒 **Automate Windows firewall rules** and verify discovery from a fresh install
 
 5. 📊 **Weekly reviews** - Check progress against Phase checklist
 

@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
+from finance_app.services.voice.device_token_store import DeviceTokenStore
 from finance_app.services.voice.discovery import RemoteVoiceDiscoveryPublisher, resolve_local_ipv4
 from finance_app.services.voice.remote_config import RemoteVoiceConfigManager
 
@@ -106,9 +107,7 @@ class RemoteAudioServer:
         # Phase 3: Session resumption tracking for persistent connections
         self._session_lock = threading.Lock()
         self._active_sessions: dict[str, SessionResumption] = {}  # connection_id -> SessionResumption
-        self._device_tokens_lock = threading.Lock()
-        self._device_tokens_path = Path.home() / ".finance-voice" / "paired-device-tokens.json"
-        self._device_tokens: dict[str, str] = self._load_device_tokens()
+        self._device_token_store = DeviceTokenStore()
 
         self.on_packet: Callable[[RemoteAudioPacket], None] | None = None
         self.on_status: Callable[[str], None] | None = None
@@ -161,45 +160,12 @@ class RemoteAudioServer:
             for cid in stale:
                 del self._active_sessions[cid]
 
-    def _load_device_tokens(self) -> dict[str, str]:
-        path = self._device_tokens_path
-        try:
-            if not path.exists():
-                return {}
-            payload = json.loads(path.read_text(encoding="utf-8"))
-            if not isinstance(payload, dict):
-                return {}
-            loaded: dict[str, str] = {}
-            for key, value in payload.items():
-                source = str(key).strip()
-                token = str(value).strip()
-                if source and len(token) >= 16:
-                    loaded[source] = token
-            return loaded
-        except Exception:
-            return {}
-
-    def _save_device_tokens(self) -> None:
-        path = self._device_tokens_path
-        try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(json.dumps(self._device_tokens, ensure_ascii=True, indent=2), encoding="utf-8")
-        except Exception:
-            pass
-
     def _get_device_token(self, source_id: str) -> str:
-        with self._device_tokens_lock:
-            return self._device_tokens.get(source_id, "")
+        record = self._device_token_store.load_token(source_id)
+        return record.token_hash if record is not None else ""
 
     def _issue_device_token(self, source_id: str) -> str:
-        with self._device_tokens_lock:
-            existing = self._device_tokens.get(source_id, "")
-            if len(existing) >= 16:
-                return existing
-            token = secrets.token_urlsafe(32)
-            self._device_tokens[source_id] = token
-            self._save_device_tokens()
-            return token
+        return self._device_token_store.issue_token(source_id)
 
     def start(self) -> None:
         if self._thread is not None and self._thread.is_alive():
@@ -331,7 +297,7 @@ class RemoteAudioServer:
                         # 1) enrolled per-device token
                         # 2) pairing-window enrollment using pairing code/session
                         device_token = outer._get_device_token(source_id)
-                        token_valid_device = bool(device_token and token and hmac.compare_digest(token, device_token))
+                        token_valid_device = bool(device_token and token and outer._device_token_store.verify_token(source_id, token))
 
                         if token_valid_device:
                             authenticated = True
