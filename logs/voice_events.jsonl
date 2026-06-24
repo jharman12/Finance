@@ -984,3 +984,10 @@
 {"ts": "2026-06-24T21:10:34.239536+00:00", "event": "continuation_resumed", "utterance_id": 1}
 {"ts": "2026-06-24T21:10:34.956728+00:00", "event": "continuation_window_started", "utterance_id": 1, "seconds": 0.7}
 {"ts": "2026-06-24T21:10:41.159676+00:00", "event": "voice_stopped"}
+{"ts": "2026-06-24T21:18:17.480025+00:00", "event": "voice_stopped"}
+{"ts": "2026-06-24T21:19:07.469807+00:00", "event": "remote_capture_start", "source_id": "JenkinsEnvy", "utterance_id": 1}
+{"ts": "2026-06-24T21:19:11.344836+00:00", "event": "continuation_window_started", "utterance_id": 1, "seconds": 0.7}
+{"ts": "2026-06-24T21:19:11.550021+00:00", "event": "continuation_resumed", "utterance_id": 1}
+{"ts": "2026-06-24T21:19:12.123968+00:00", "event": "continuation_window_started", "utterance_id": 1, "seconds": 0.7}
+{"ts": "2026-06-24T21:19:19.122097+00:00", "event": "voice_stopped"}
+{"ts": "2026-06-24T21:24:58.552122+00:00", "event": "voice_stopped"}

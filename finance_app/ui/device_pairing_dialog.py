@@ -48,6 +48,7 @@ class DevicePairingDialog(QDialog):
         self._pairing_timeout_timer = QTimer()
         self._pairing_timeout_timer.setSingleShot(True)
         self._pairing_timeout_timer.timeout.connect(self._on_pairing_timeout)
+        self._finalized = False
         self.device_discovered_signal.connect(self._handle_discovered_device)
         self.diagnostic_signal.connect(self._handle_diagnostic)
         self.pairing_verified_signal.connect(self.on_pairing_confirmed)
@@ -243,8 +244,9 @@ class DevicePairingDialog(QDialog):
         """Called when pairing is confirmed by connection handler."""
         # Guard: if we were already accepted/rejected (e.g. a late queued signal
         # arrives after dialog was closed), do nothing.
-        if not self.isVisible():
+        if self._finalized:
             return
+        self._finalized = True
         # Explicitly stop and disconnect the timer before accept() so that the
         # QTimer is inert before any possible GC, breaking the reference cycle.
         try:
@@ -264,6 +266,7 @@ class DevicePairingDialog(QDialog):
 
     def _on_cancel_clicked(self) -> None:
         """Handle cancel button."""
+        self._finalized = True
         if self._discovery_browser is not None:
             try:
                 self._discovery_browser.stop()
@@ -282,6 +285,7 @@ class DevicePairingDialog(QDialog):
 
     def closeEvent(self, event: Any) -> None:
         """Handle dialog close event."""
+        self._finalized = True
         if self._discovery_browser is not None:
             try:
                 self._discovery_browser.stop()

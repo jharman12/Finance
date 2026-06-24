@@ -107,6 +107,7 @@ class MainWindow(QMainWindow):
         self._processed_voice_command_order: deque[str] = deque(maxlen=128)
         self._voice_auto_execute_threshold = 0.80
         self._voice_confirm_threshold = 0.60
+        self._known_remote_device_runtime: dict[str, dict[str, object]] = {}
         self._pending_assistant_session_key: str | None = None
         self._pending_assistant_request_context: dict[str, object] | None = None
         self._active_assistant_request_context: dict[str, object] | None = None
@@ -2830,8 +2831,32 @@ class MainWindow(QMainWindow):
         self.pair_new_device_button.clicked.connect(self._on_pair_new_device_clicked)
         self.pair_new_device_button.setMaximumWidth(200)
         pair_button_row.addWidget(self.pair_new_device_button)
+        self.refresh_known_devices_button = QPushButton("Refresh Known Devices")
+        self.refresh_known_devices_button.clicked.connect(self._refresh_known_devices_table)
+        self.refresh_known_devices_button.setMaximumWidth(220)
+        pair_button_row.addWidget(self.refresh_known_devices_button)
         pair_button_row.addStretch()
         panel_layout.addLayout(pair_button_row)
+
+        panel_layout.addWidget(QLabel("Known Remote Voice Devices"))
+        self.known_devices_table = QTableWidget()
+        self.known_devices_table.setColumnCount(5)
+        self.known_devices_table.setHorizontalHeaderLabels(["Device", "Source ID", "Pair/Auth", "Connection", "Last Seen"])
+        self.known_devices_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.known_devices_table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.known_devices_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.known_devices_table.verticalHeader().setVisible(False)
+        self.known_devices_table.horizontalHeader().setStretchLastSection(True)
+        self.known_devices_table.setMinimumHeight(140)
+        panel_layout.addWidget(self.known_devices_table)
+
+        known_actions_row = QHBoxLayout()
+        self.forget_known_device_button = QPushButton("Forget Selected Device")
+        self.forget_known_device_button.clicked.connect(self._forget_selected_known_device)
+        self.forget_known_device_button.setMaximumWidth(220)
+        known_actions_row.addWidget(self.forget_known_device_button)
+        known_actions_row.addStretch()
+        panel_layout.addLayout(known_actions_row)
 
         layout.addWidget(panel)
 
@@ -2942,26 +2967,34 @@ class MainWindow(QMainWindow):
 
     def _on_device_pairing_confirmed(self, source_id: str, pairing_code: str, device: object | None = None) -> None:
         """Handle device pairing confirmed."""
-        if device is not None:
-            host = str(getattr(device, "host", "") or "")
-            port = int(getattr(device, "port", 0) or 0)
-            device_name = str(getattr(device, "device_name", "") or source_id)
-            protocol_version = str(getattr(device, "protocol_version", "") or "1")
-            role = str(getattr(device, "role", "") or "remote-sender")
-            paired_device = PairedRemoteDevice(
-                id=None,
-                source_id=source_id,
-                device_name=device_name,
-                host_ip=host,
-                port=port,
-                role=role,
-                protocol_version=protocol_version,
-                paired_at=datetime.now(),
-                last_connected_at=None,
-                is_active=True,
-            )
-            self.app_controller.save_paired_remote_device(paired_device)
+        host = str(getattr(device, "host", "") or "") if device is not None else ""
+        port = int(getattr(device, "port", 0) or 0) if device is not None else 0
+        device_name = str(getattr(device, "device_name", "") or source_id) if device is not None else source_id
+        protocol_version = str(getattr(device, "protocol_version", "") or "1") if device is not None else "1"
+        role = str(getattr(device, "role", "") or "remote-sender") if device is not None else "remote-sender"
+        paired_device = PairedRemoteDevice(
+            id=None,
+            source_id=source_id,
+            device_name=device_name,
+            host_ip=host,
+            port=port,
+            role=role,
+            protocol_version=protocol_version,
+            paired_at=datetime.now(),
+            last_connected_at=datetime.now(),
+            is_active=True,
+        )
+        self.app_controller.save_paired_remote_device(paired_device)
+        self._known_remote_device_runtime[source_id] = {
+            "authenticated": True,
+            "connected": True,
+            "auth_mode": "pairing",
+            "last_seen_at": datetime.now(),
+            "last_event_at": datetime.now(),
+            "disconnect_reason": "",
+        }
 
+        if device is not None:
             service_name = str(getattr(device, "service_name", "") or source_id)
             self._discovered_voice_devices[service_name] = {
                 "service_name": f"{device_name} ({source_id[:8]}...)",
@@ -2969,11 +3002,91 @@ class MainWindow(QMainWindow):
             }
             self._update_discovered_devices_list()
 
+        self._refresh_known_devices_table()
+
         QMessageBox.information(
             self,
             "Device Paired",
             f"Successfully paired device: {source_id}\n\nPairing code: {pairing_code}"
         )
+
+    def _refresh_known_devices_table(self) -> None:
+        table = getattr(self, "known_devices_table", None)
+        if not isinstance(table, QTableWidget):
+            return
+
+        devices = self.app_controller.list_paired_remote_devices(active_only=True)
+        table.setRowCount(len(devices))
+        for row, device in enumerate(devices):
+            source_id = str(device.source_id)
+            runtime = self._known_remote_device_runtime.get(source_id, {})
+
+            auth_mode = str(runtime.get("auth_mode", "")).strip()
+            authenticated = bool(runtime.get("authenticated", False))
+            connected = bool(runtime.get("connected", False))
+            disconnect_reason = str(runtime.get("disconnect_reason", "")).strip()
+
+            pair_auth = "Paired"
+            if authenticated:
+                pair_auth = f"Paired + Authenticated ({auth_mode or 'token'})"
+
+            connection_state = "Connected" if connected else "Disconnected"
+            if disconnect_reason and not connected:
+                connection_state = f"Disconnected ({disconnect_reason})"
+
+            last_seen = runtime.get("last_seen_at")
+            if isinstance(last_seen, datetime):
+                last_seen_text = last_seen.strftime("%Y-%m-%d %H:%M:%S")
+            elif device.last_connected_at is not None:
+                last_seen_text = device.last_connected_at.strftime("%Y-%m-%d %H:%M:%S")
+            else:
+                last_seen_text = "Never"
+
+            device_item = QTableWidgetItem(str(device.device_name or source_id))
+            source_item = QTableWidgetItem(source_id)
+            source_item.setData(Qt.UserRole, source_id)
+            pair_item = QTableWidgetItem(pair_auth)
+            connection_item = QTableWidgetItem(connection_state)
+            last_seen_item = QTableWidgetItem(last_seen_text)
+
+            table.setItem(row, 0, device_item)
+            table.setItem(row, 1, source_item)
+            table.setItem(row, 2, pair_item)
+            table.setItem(row, 3, connection_item)
+            table.setItem(row, 4, last_seen_item)
+
+        table.resizeColumnsToContents()
+
+    def _forget_selected_known_device(self) -> None:
+        table = getattr(self, "known_devices_table", None)
+        if not isinstance(table, QTableWidget):
+            return
+
+        row = table.currentRow()
+        if row < 0:
+            self.status_bar.showMessage("Select a known device to forget.", 3000)
+            return
+
+        source_item = table.item(row, 1)
+        source_id = str(source_item.data(Qt.UserRole) if source_item is not None else "").strip()
+        if not source_id:
+            self.status_bar.showMessage("Could not determine selected device.", 3000)
+            return
+
+        response = QMessageBox.question(
+            self,
+            "Forget Remote Device",
+            f"Forget paired device '{source_id}'?\n\nIt will need to be paired again.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if response != QMessageBox.Yes:
+            return
+
+        self.app_controller.remove_paired_remote_device(source_id)
+        self._known_remote_device_runtime.pop(source_id, None)
+        self._refresh_known_devices_table()
+        self.status_bar.showMessage(f"Forgot remote device: {source_id}", 4000)
 
     def _on_device_pairing_cancelled(self) -> None:
         """Handle device pairing cancelled."""
@@ -3648,6 +3761,7 @@ class MainWindow(QMainWindow):
         self.refresh_charts()
         self.refresh_budget()
         self.refresh_assets()
+        self._refresh_known_devices_table()
 
     def _populate_period_selectors(self, month_combo: QComboBox, year_combo: QComboBox) -> None:
         month_combo.clear()
@@ -4652,6 +4766,17 @@ class MainWindow(QMainWindow):
         if event_type == "client_authenticated":
             source_id = str(payload.get("source_id", "")).strip() or "(unknown)"
             auth_mode = str(payload.get("auth_mode", "")).strip() or "unknown"
+            now = datetime.now()
+            self._known_remote_device_runtime[source_id] = {
+                "authenticated": True,
+                "connected": True,
+                "auth_mode": auth_mode,
+                "last_seen_at": now,
+                "last_event_at": now,
+                "disconnect_reason": "",
+            }
+            self.app_controller.update_paired_device_connection_time(source_id)
+            self._refresh_known_devices_table()
             service_name = f"{source_id}"
             self._discovered_voice_devices[service_name] = {
                 "service_name": service_name,
@@ -4663,12 +4788,39 @@ class MainWindow(QMainWindow):
         if event_type == "client_disconnected":
             source_id = str(payload.get("source_id", "")).strip() or "(unknown)"
             reason = str(payload.get("reason", "")).strip() or "disconnected"
+            now = datetime.now()
+            current = dict(self._known_remote_device_runtime.get(source_id, {}))
+            current.update(
+                {
+                    "connected": False,
+                    "disconnect_reason": reason,
+                    "last_event_at": now,
+                }
+            )
+            self._known_remote_device_runtime[source_id] = current
+            self._refresh_known_devices_table()
             service_name = f"{source_id}"
             self._discovered_voice_devices[service_name] = {
                 "service_name": service_name,
                 "state": f"disconnected:{reason}",
             }
             self._update_discovered_devices_list()
+            return
+
+        if event_type == "auth_rejected":
+            source_id = str(payload.get("source_id", "")).strip() or "(unknown)"
+            now = datetime.now()
+            current = dict(self._known_remote_device_runtime.get(source_id, {}))
+            current.update(
+                {
+                    "authenticated": False,
+                    "connected": False,
+                    "disconnect_reason": "auth_rejected",
+                    "last_event_at": now,
+                }
+            )
+            self._known_remote_device_runtime[source_id] = current
+            self._refresh_known_devices_table()
             return
 
         mode = self._voice_active_surface or "testing"

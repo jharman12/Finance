@@ -303,17 +303,40 @@ class RemoteWakeStreamSender:
             allow_untrusted=False,
             reconnect_config=ReconnectConfig(),
         )
-        persistent.on_connected = lambda: _debug(
-            f"Persistent connection established for {self.config.source_id} connection_id={persistent.connection_id or '(pending)'}"
-        )
-        persistent.on_disconnected = lambda reason: _log(f"Persistent connection disconnected ({reason}).")
-        persistent.on_error = lambda message: _debug(f"Persistent connection error: {message}")
+        persistent.on_connected = self._on_persistent_connected
+        persistent.on_disconnected = self._on_persistent_disconnected
+        persistent.on_error = self._on_persistent_error
 
         if not persistent.start():
             raise RuntimeError("Failed to establish persistent remote connection.")
 
         self._persistent_connection = persistent
         return persistent
+
+    def _on_persistent_connected(self) -> None:
+        connection = self._persistent_connection
+        connection_id = connection.connection_id if connection is not None else ""
+        _debug(
+            f"Persistent connection established for {self.config.source_id} connection_id={connection_id or '(pending)'}"
+        )
+        self._paired_with_main = True
+
+    def _on_persistent_disconnected(self, reason: str) -> None:
+        _log(f"Persistent connection disconnected ({reason}).")
+        self._connection = None
+
+    def _on_persistent_error(self, message: str) -> None:
+        _debug(f"Persistent connection error: {message}")
+        lowered = (message or "").strip().lower()
+        if "auth_rejected" in lowered or "paired_false" in lowered or "hello rejected" in lowered:
+            self._connection = None
+            self._paired_with_main = False
+            self._pairing_code = None
+            self._last_announced_pairing_code = None
+            self._waiting_for_pair_notice_logged = False
+            self._last_pair_probe_at = 0.0
+            _log("Persistent authentication was rejected. Re-entering pairing mode.")
+            self._shutdown_persistent_connection()
 
     def run(self) -> int:
         try:

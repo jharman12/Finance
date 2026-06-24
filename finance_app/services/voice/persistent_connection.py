@@ -118,9 +118,10 @@ class PersistentRemoteConnection:
                 self.connected = False
 
         # Wait for threads to stop
-        if self._heartbeat_thread is not None:
+        current = threading.current_thread()
+        if self._heartbeat_thread is not None and self._heartbeat_thread.is_alive() and self._heartbeat_thread is not current:
             self._heartbeat_thread.join(timeout=2.0)
-        if self._reconnect_thread is not None:
+        if self._reconnect_thread is not None and self._reconnect_thread.is_alive() and self._reconnect_thread is not current:
             self._reconnect_thread.join(timeout=2.0)
 
     def send_audio(self, *args, chunk: bytes | None = None, seq_no: int | None = None, audio_b64: str | None = None, sent_at_ms: int | None = None) -> bool:
@@ -226,6 +227,30 @@ class PersistentRemoteConnection:
 
             ack_msg = json.loads(ack_line)
             if str(ack_msg.get("type", "")).lower() != "hello_ack":
+                self._emit_error("Persistent hello rejected: invalid_ack_type")
+                try:
+                    self._socket.close()
+                except Exception:
+                    pass
+                self._socket = None
+                return False
+
+            if bool(ack_msg.get("auth_rejected", False)):
+                self._emit_error("Persistent hello rejected: auth_rejected")
+                try:
+                    self._socket.close()
+                except Exception:
+                    pass
+                self._socket = None
+                return False
+
+            if not bool(ack_msg.get("paired", False)):
+                self._emit_error("Persistent hello rejected: paired_false")
+                try:
+                    self._socket.close()
+                except Exception:
+                    pass
+                self._socket = None
                 return False
 
             # Phase 3: Extract connection_id for session resumption

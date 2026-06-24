@@ -28,3 +28,15 @@ class AppController:
 
     def save_paired_remote_device(self, device: PairedRemoteDevice) -> PairedRemoteDevice:
         return self._repository.save_paired_remote_device(device)
+
+    def list_paired_remote_devices(self, active_only: bool = True) -> list[PairedRemoteDevice]:
+        return self._repository.list_paired_remote_devices(active_only=active_only)
+
+    def get_paired_remote_device(self, source_id: str) -> PairedRemoteDevice | None:
+        return self._repository.get_paired_remote_device(source_id)
+
+    def update_paired_device_connection_time(self, source_id: str) -> None:
+        self._repository.update_paired_device_connection_time(source_id)
+
+    def remove_paired_remote_device(self, source_id: str) -> None:
+        self._repository.remove_paired_remote_device(source_id)
