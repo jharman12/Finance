@@ -20,6 +20,7 @@ class _FakePairingState:
 class _FakePairingManager:
     def __init__(self) -> None:
         self._state = _FakePairingState("node-1", "ABC123", "sess-1")
+        self.confirmed_calls: list[tuple[str, str]] = []
 
     def is_pairing(self) -> bool:
         return True
@@ -33,6 +34,12 @@ class _FakePairingManager:
             and pairing_code == self._state.expected_pairing_code
             and pairing_session_id == self._state.pairing_session_id
         )
+
+    def confirm_existing_pair(self, source_id: str) -> bool:
+        if source_id != self._state.source_id:
+            return False
+        self.confirmed_calls.append((source_id, self._state.expected_pairing_code))
+        return True
 
 from finance_app.services.voice.network_transport import RemoteAudioPacket, RemoteAudioServer
 
@@ -223,6 +230,33 @@ class VoiceRemoteTransportTests(unittest.TestCase):
         self.assertEqual(bool(ack.get("paired")), True)
         self.assertEqual(str(ack.get("pairing_code_hint", "")), "ABC123")
         self.assertEqual(str(ack.get("pairing_session_id", "")), "sess-1")
+
+    def test_authenticated_existing_device_confirms_active_pairing_session(self) -> None:
+        pairing_manager = _FakePairingManager()
+        server = RemoteAudioServer(
+            host="127.0.0.1",
+            port=0,
+            auth_token="1234567890abcdef",
+            pairing_manager=pairing_manager,
+        )
+        issued_token = server._device_token_store.issue_token("node-1")
+        server.start()
+        try:
+            ack = self._send_and_read_first_line(
+                "127.0.0.1",
+                server.bound_port,
+                {
+                    "type": "hello",
+                    "source_id": "node-1",
+                    "token": issued_token,
+                },
+            )
+        finally:
+            server.stop()
+
+        self.assertEqual(ack.get("type"), "hello_ack")
+        self.assertEqual(bool(ack.get("paired")), True)
+        self.assertEqual(pairing_manager.confirmed_calls, [("node-1", "ABC123")])
 
     def test_authenticated_hello_with_pairing_code_confirms_pairing(self) -> None:
         server = RemoteAudioServer(

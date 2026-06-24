@@ -105,6 +105,30 @@ class RemoteVoicePairingManager:
 
         return True
 
+    def confirm_existing_pair(self, source_id: str) -> bool:
+        """Confirm pairing for an already enrolled device token during an active pairing window.
+
+        This keeps the UI pairing dialog in sync when a device is already trusted and
+        re-authenticates via its persisted per-device token.
+        """
+        callback: Callable[[str, str], None] | None = None
+        pairing_code = ""
+        with self._lock:
+            if self._pairing_state is None:
+                return False
+            if self._pairing_state.is_session_expired():
+                return False
+            if self._pairing_state.source_id != source_id:
+                return False
+
+            self._pairing_state.confirmed = True
+            pairing_code = self._pairing_state.expected_pairing_code
+            callback = self._on_pairing_confirmed
+
+        if callback is not None:
+            self._safe_invoke_callback(callback, source_id, pairing_code)
+        return True
+
     @staticmethod
     def _safe_invoke_callback(callback: Callable[[str, str], None], source_id: str, pairing_code: str) -> None:
         try:

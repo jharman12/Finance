@@ -302,6 +302,24 @@ class RemoteAudioServer:
                         if token_valid_device:
                             authenticated = True
                             auth_mode = "device_token"
+                            pairing_verified = True
+
+                            # If the UI opened a pairing window for this device while it was
+                            # already enrolled, confirm through pairing manager so the dialog
+                            # can close and persist UI state consistently.
+                            if (
+                                pairing_required
+                                and pairing_state is not None
+                                and not pairing_state.is_session_expired()
+                                and pairing_state.source_id == source_id
+                                and outer.pairing_manager is not None
+                                and hasattr(outer.pairing_manager, "confirm_existing_pair")
+                            ):
+                                try:
+                                    confirmed_existing = bool(outer.pairing_manager.confirm_existing_pair(source_id))
+                                    pairing_verified = pairing_verified or confirmed_existing
+                                except Exception:
+                                    pass
 
                         outer._debug_log(
                             "Hello received "

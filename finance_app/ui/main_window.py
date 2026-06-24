@@ -4649,6 +4649,28 @@ class MainWindow(QMainWindow):
             )
             return
 
+        if event_type == "client_authenticated":
+            source_id = str(payload.get("source_id", "")).strip() or "(unknown)"
+            auth_mode = str(payload.get("auth_mode", "")).strip() or "unknown"
+            service_name = f"{source_id}"
+            self._discovered_voice_devices[service_name] = {
+                "service_name": service_name,
+                "state": f"authenticated:{auth_mode}",
+            }
+            self._update_discovered_devices_list()
+            return
+
+        if event_type == "client_disconnected":
+            source_id = str(payload.get("source_id", "")).strip() or "(unknown)"
+            reason = str(payload.get("reason", "")).strip() or "disconnected"
+            service_name = f"{source_id}"
+            self._discovered_voice_devices[service_name] = {
+                "service_name": service_name,
+                "state": f"disconnected:{reason}",
+            }
+            self._update_discovered_devices_list()
+            return
+
         mode = self._voice_active_surface or "testing"
         widgets = self._voice_ui.get(mode)
         if widgets is None:

@@ -214,6 +214,22 @@ class TestRemoteVoicePairingManagerWithSessionId(unittest.TestCase):
         self.assertEqual(len(callback_args), 1)
         self.assertEqual(callback_args[0], ("device-1", "ABC123"))
 
+    def test_confirm_existing_pair_fires_callback_for_active_session(self) -> None:
+        """Token-authenticated existing device should confirm active pairing UI session."""
+        callback_args = []
+
+        def callback(source_id: str, code: str) -> None:
+            callback_args.append((source_id, code))
+
+        self.manager.set_callbacks(on_confirmed=callback)
+        self.manager.start_pairing("device-1", "ABC123", "session-xyz")
+
+        result = self.manager.confirm_existing_pair("device-1")
+
+        self.assertTrue(result)
+        self.assertEqual(len(callback_args), 1)
+        self.assertEqual(callback_args[0], ("device-1", "ABC123"))
+
 
 class TestPhase2Protocol(unittest.TestCase):
     """Integration tests for Phase 2 pairing protocol with session-based validation."""
