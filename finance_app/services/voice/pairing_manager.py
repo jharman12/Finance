@@ -66,7 +66,12 @@ class RemoteVoicePairingManager:
     def is_pairing(self) -> bool:
         """Check if currently waiting for a pairing connection."""
         with self._lock:
-            return self._pairing_state is not None
+            if self._pairing_state is None:
+                return False
+            if self._pairing_state.is_session_expired():
+                self._pairing_state = None
+                return False
+            return True
 
     def verify_pairing_code(self, source_id: str, pairing_code: str, pairing_session_id: str = "") -> bool:
         """
@@ -139,4 +144,6 @@ class RemoteVoicePairingManager:
     def get_pairing_state(self) -> PairingState | None:
         """Get current pairing state."""
         with self._lock:
+            if self._pairing_state is not None and self._pairing_state.is_session_expired():
+                self._pairing_state = None
             return self._pairing_state

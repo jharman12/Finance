@@ -2889,6 +2889,10 @@ class MainWindow(QMainWindow):
         pairing_manager = None
         if self.voice_coordinator and hasattr(self.voice_coordinator, 'pairing_manager'):
             pairing_manager = self.voice_coordinator.pairing_manager
+            try:
+                pairing_manager.cancel_pairing()
+            except Exception:
+                pass
 
         pairing_ready = False
         pairing_ready_message = "Voice coordinator unavailable for pairing."

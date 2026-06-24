@@ -991,3 +991,7 @@
 {"ts": "2026-06-24T21:19:12.123968+00:00", "event": "continuation_window_started", "utterance_id": 1, "seconds": 0.7}
 {"ts": "2026-06-24T21:19:19.122097+00:00", "event": "voice_stopped"}
 {"ts": "2026-06-24T21:24:58.552122+00:00", "event": "voice_stopped"}
+{"ts": "2026-06-24T21:26:20.313273+00:00", "event": "remote_capture_start", "source_id": "JenkinsEnvy", "utterance_id": 1}
+{"ts": "2026-06-24T21:26:23.610308+00:00", "event": "continuation_window_started", "utterance_id": 1, "seconds": 0.7}
+{"ts": "2026-06-24T21:26:23.720392+00:00", "event": "continuation_resumed", "utterance_id": 1}
+{"ts": "2026-06-24T21:26:25.013540+00:00", "event": "continuation_window_started", "utterance_id": 1, "seconds": 0.7}

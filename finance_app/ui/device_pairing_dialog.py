@@ -267,6 +267,8 @@ class DevicePairingDialog(QDialog):
     def _on_cancel_clicked(self) -> None:
         """Handle cancel button."""
         self._finalized = True
+        if self.pairing_manager is not None:
+            self.pairing_manager.cancel_pairing()
         if self._discovery_browser is not None:
             try:
                 self._discovery_browser.stop()
@@ -286,6 +288,8 @@ class DevicePairingDialog(QDialog):
     def closeEvent(self, event: Any) -> None:
         """Handle dialog close event."""
         self._finalized = True
+        if self.pairing_manager is not None:
+            self.pairing_manager.cancel_pairing()
         if self._discovery_browser is not None:
             try:
                 self._discovery_browser.stop()

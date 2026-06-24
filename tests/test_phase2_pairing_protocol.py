@@ -230,6 +230,20 @@ class TestRemoteVoicePairingManagerWithSessionId(unittest.TestCase):
         self.assertEqual(len(callback_args), 1)
         self.assertEqual(callback_args[0], ("device-1", "ABC123"))
 
+    def test_is_pairing_auto_clears_expired_session(self) -> None:
+        """Expired pairing windows must not remain active and trigger implicit pairing."""
+        expired_state = PairingState(
+            source_id="device-1",
+            expected_pairing_code="ABC123",
+            pairing_session_id="session-expired",
+            session_created_at=time.time() - 120,
+            session_timeout_seconds=60.0,
+        )
+        self.manager._pairing_state = expired_state
+
+        self.assertFalse(self.manager.is_pairing())
+        self.assertIsNone(self.manager.get_pairing_state())
+
 
 class TestPhase2Protocol(unittest.TestCase):
     """Integration tests for Phase 2 pairing protocol with session-based validation."""
