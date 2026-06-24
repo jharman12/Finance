@@ -53,3 +53,9 @@ class RemoteStreamSource:
 
     def stop(self) -> None:
         self.server.stop()
+
+    def revoke_device_token(self, source_id: str) -> bool:
+        return self.server.revoke_device_token(source_id)
+
+    def has_device_token(self, source_id: str) -> bool:
+        return self.server.has_device_token(source_id)

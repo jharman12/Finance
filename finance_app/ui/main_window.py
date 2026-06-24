@@ -171,6 +171,8 @@ class MainWindow(QMainWindow):
         self.voice_diagnostic_signal.connect(self._handle_voice_diagnostic)
 
         self._bind_voice_coordinator_callbacks()
+
+        self._initialize_remote_voice_startup_state()
         
         # Load saved model preference
         saved_model = self.app_controller.get_setting("selected_model")
@@ -2873,14 +2875,31 @@ class MainWindow(QMainWindow):
         """Handle remote voice enable/disable toggle."""
         self._set_remote_voice_enabled(checked)
         if checked:
-            self.remote_voice_status_label.setText("Enabled - waiting for pairs...")
-            ok, message = self.voice_coordinator.set_remote_audio_enabled(True)
+            self.remote_voice_status_label.setText("Enabled - starting receiver...")
+            ok, message = self.voice_coordinator.ensure_remote_pairing_ready()
             if not ok:
                 self.remote_voice_status_label.setText("Enabled - receiver setup failed")
                 self.status_bar.showMessage(message, 6000)
+            else:
+                self.remote_voice_status_label.setText("Enabled - receiver ready")
         else:
             self.remote_voice_status_label.setText("Disabled")
             self.voice_coordinator.set_remote_audio_enabled(False)
+
+    def _initialize_remote_voice_startup_state(self) -> None:
+        """Bring remote receiver up automatically on startup when enabled in settings."""
+        if not self._get_remote_voice_enabled():
+            self.remote_voice_status_label.setText("Disabled")
+            return
+
+        self.remote_voice_status_label.setText("Enabled - starting receiver...")
+        ok, message = self.voice_coordinator.ensure_remote_pairing_ready()
+        if not ok:
+            self.remote_voice_status_label.setText("Enabled - receiver setup failed")
+            self.status_bar.showMessage(message, 6000)
+            return
+
+        self.remote_voice_status_label.setText("Enabled - receiver ready")
 
     def _on_pair_new_device_clicked(self) -> None:
         """Handle 'Pair New Device' button clicked."""
@@ -3087,10 +3106,22 @@ class MainWindow(QMainWindow):
         if response != QMessageBox.Yes:
             return
 
+        token_revoked = False
+        try:
+            token_revoked = bool(self.voice_coordinator.revoke_remote_device_token(source_id))
+        except Exception:
+            token_revoked = False
+
         self.app_controller.remove_paired_remote_device(source_id)
         self._known_remote_device_runtime.pop(source_id, None)
         self._refresh_known_devices_table()
-        self.status_bar.showMessage(f"Forgot remote device: {source_id}", 4000)
+        if token_revoked:
+            self.status_bar.showMessage(f"Forgot remote device and revoked token: {source_id}", 5000)
+        else:
+            self.status_bar.showMessage(
+                f"Forgot remote device in UI, but token revocation failed: {source_id}",
+                7000,
+            )
 
     def _on_device_pairing_cancelled(self) -> None:
         """Handle device pairing cancelled."""

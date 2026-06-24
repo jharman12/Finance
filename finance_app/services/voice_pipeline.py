@@ -13,6 +13,7 @@ from finance_app.services.voice.asr_faster_whisper import FasterWhisperAsrProvid
 from finance_app.services.voice.asr_router import AsrRouter
 from finance_app.services.voice.asr_vosk import VoskAsrProvider
 from finance_app.services.voice.command_event import VoiceCommandEvent
+from finance_app.services.voice.device_token_store import DeviceTokenStore
 from finance_app.services.voice.postprocess import normalize_command_text
 from finance_app.services.voice.remote_config import RemoteVoiceConfigManager
 from finance_app.services.voice.remote_stream_source import RemoteStreamSource
@@ -339,6 +340,21 @@ class VoiceCoordinator:
     def ingest_remote_text(self, text: str, source_id: str = "remote-node", is_final: bool = True) -> None:
         """Future expansion point for remote Alexa-like devices."""
         self.router.process_text(VoiceTextEvent(text=text, is_final=is_final, source_id=source_id))
+
+    def revoke_remote_device_token(self, source_id: str) -> bool:
+        """Revoke a paired remote device token so it can no longer auto-authenticate."""
+        cleaned = str(source_id).strip()
+        if not cleaned:
+            return False
+
+        if self.remote_stream is not None:
+            try:
+                return bool(self.remote_stream.revoke_device_token(cleaned))
+            except Exception:
+                pass
+
+        store = DeviceTokenStore()
+        return bool(store.revoke_token(cleaned))
 
     def _build_wake_detector(self):
         if self.wake_mode == "openwakeword":

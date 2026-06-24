@@ -167,6 +167,14 @@ class RemoteAudioServer:
     def _issue_device_token(self, source_id: str) -> str:
         return self._device_token_store.issue_token(source_id)
 
+    def revoke_device_token(self, source_id: str) -> bool:
+        """Revoke a paired per-device token so future auth is rejected."""
+        return self._device_token_store.revoke_token(source_id)
+
+    def has_device_token(self, source_id: str) -> bool:
+        """Check whether a non-revoked per-device token exists."""
+        return self._device_token_store.load_token(source_id) is not None
+
     def start(self) -> None:
         if self._thread is not None and self._thread.is_alive():
             return

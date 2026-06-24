@@ -41,3 +41,15 @@ class DeviceTokenStoreTests(TestCase):
             migrated_payload = json.loads(legacy_path.read_text(encoding="utf-8"))
             self.assertEqual(migrated_payload["schema_version"], 1)
             self.assertEqual(migrated_payload["records"][0]["source_id"], "remote-legacy")
+
+    def test_revoked_token_no_longer_loads_as_active(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = DeviceTokenStore(temp_dir)
+            issued = store.issue_token("kitchen-node")
+
+            self.assertTrue(store.verify_token("kitchen-node", issued))
+            self.assertIsNotNone(store.load_token("kitchen-node"))
+
+            self.assertTrue(store.revoke_token("kitchen-node"))
+            self.assertIsNone(store.load_token("kitchen-node"))
+            self.assertFalse(store.verify_token("kitchen-node", issued))
