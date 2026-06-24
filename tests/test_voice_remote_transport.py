@@ -63,7 +63,7 @@ class VoiceRemoteTransportTests(unittest.TestCase):
 
     def test_accepts_authenticated_audio_packet(self) -> None:
         server = RemoteAudioServer(host="127.0.0.1", port=0, auth_token="1234567890abcdef")
-        server._device_tokens["node-1"] = "device-token-1234567890abcdef"
+        issued_token = server._device_token_store.issue_token("node-1")
         server.on_packet = self.received.append
         server.start()
         try:
@@ -72,7 +72,7 @@ class VoiceRemoteTransportTests(unittest.TestCase):
                 "127.0.0.1",
                 server.bound_port,
                 [
-                    {"type": "hello", "source_id": "node-1", "token": "device-token-1234567890abcdef"},
+                    {"type": "hello", "source_id": "node-1", "token": issued_token},
                     {
                         "type": "audio",
                         "seq_no": 1,
@@ -115,7 +115,7 @@ class VoiceRemoteTransportTests(unittest.TestCase):
 
     def test_rejects_non_monotonic_sequence(self) -> None:
         server = RemoteAudioServer(host="127.0.0.1", port=0, auth_token="1234567890abcdef")
-        server._device_tokens["node-1"] = "device-token-1234567890abcdef"
+        issued_token = server._device_token_store.issue_token("node-1")
         server.on_packet = self.received.append
         server.start()
         try:
@@ -125,7 +125,7 @@ class VoiceRemoteTransportTests(unittest.TestCase):
                 "127.0.0.1",
                 server.bound_port,
                 [
-                    {"type": "hello", "source_id": "node-1", "token": "device-token-1234567890abcdef"},
+                    {"type": "hello", "source_id": "node-1", "token": issued_token},
                     {"type": "audio", "seq_no": 2, "audio_b64": audio_a},
                     {"type": "audio", "seq_no": 1, "audio_b64": audio_b},
                 ],
@@ -203,7 +203,7 @@ class VoiceRemoteTransportTests(unittest.TestCase):
             auth_token="1234567890abcdef",
             pairing_manager=_FakePairingManager(),
         )
-        server._device_tokens["node-1"] = "device-token-1234567890abcdef"
+        issued_token = server._device_token_store.issue_token("node-1")
         server.start()
         try:
             ack = self._send_and_read_first_line(
@@ -212,7 +212,7 @@ class VoiceRemoteTransportTests(unittest.TestCase):
                 {
                     "type": "hello",
                     "source_id": "node-1",
-                    "token": "device-token-1234567890abcdef",
+                    "token": issued_token,
                 },
             )
         finally:
@@ -220,7 +220,7 @@ class VoiceRemoteTransportTests(unittest.TestCase):
 
         self.assertEqual(ack.get("type"), "hello_ack")
         self.assertEqual(bool(ack.get("pairing_required")), True)
-        self.assertEqual(bool(ack.get("paired")), False)
+        self.assertEqual(bool(ack.get("paired")), True)
         self.assertEqual(str(ack.get("pairing_code_hint", "")), "ABC123")
         self.assertEqual(str(ack.get("pairing_session_id", "")), "sess-1")
 
@@ -231,7 +231,7 @@ class VoiceRemoteTransportTests(unittest.TestCase):
             auth_token="1234567890abcdef",
             pairing_manager=_FakePairingManager(),
         )
-        server._device_tokens["node-1"] = "device-token-1234567890abcdef"
+        issued_token = server._device_token_store.issue_token("node-1")
         server.start()
         try:
             ack = self._send_and_read_first_line(
@@ -240,7 +240,7 @@ class VoiceRemoteTransportTests(unittest.TestCase):
                 {
                     "type": "hello",
                     "source_id": "node-1",
-                    "token": "device-token-1234567890abcdef",
+                    "token": issued_token,
                     "pairing_code": "ABC123",
                     "pairing_session_id": "sess-1",
                 },

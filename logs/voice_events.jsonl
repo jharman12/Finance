@@ -974,3 +974,8 @@
 {"ts": "2026-06-24T20:55:23.678603+00:00", "event": "continuation_window_started", "utterance_id": 1, "seconds": 0.7}
 {"ts": "2026-06-24T20:56:26.963466+00:00", "event": "voice_stopped"}
 {"ts": "2026-06-24T20:57:57.243216+00:00", "event": "voice_stopped"}
+{"ts": "2026-06-24T21:01:10.953906+00:00", "event": "voice_stopped"}
+{"ts": "2026-06-24T21:01:42.480453+00:00", "event": "voice_stopped"}
+{"ts": "2026-06-24T21:02:15.605068+00:00", "event": "voice_stopped"}
+{"ts": "2026-06-24T21:05:09.890542+00:00", "event": "voice_stopped"}
+{"ts": "2026-06-24T21:05:28.349346+00:00", "event": "voice_stopped"}

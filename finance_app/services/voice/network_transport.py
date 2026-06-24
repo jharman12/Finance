@@ -375,6 +375,7 @@ class RemoteAudioServer:
 
                         outer._emit_diagnostic(event="client_authenticated", source_id=source_id, tls=tls_enabled, auth_mode=auth_mode)
                         outer._debug_log(f"Client authenticated source_id={source_id}, tls={tls_enabled}, auth_mode={auth_mode}")
+                        is_paired = authenticated
 
                         outer._emit_diagnostic(
                             event="pairing_evaluated",
@@ -401,7 +402,7 @@ class RemoteAudioServer:
 
                         outer._debug_log(
                             "Sending hello_ack "
-                            f"source_id={source_id}, paired={pairing_verified}, pairing_required={pairing_required}"
+                            f"source_id={source_id}, paired={is_paired}, pairing_required={pairing_required}"
                         )
 
                         # Phase 3: Create session for persistent connection
@@ -412,7 +413,7 @@ class RemoteAudioServer:
                             hello_ack = {
                                 "type": "hello_ack",
                                 "connection_id": session.connection_id,  # Phase 3
-                                "paired": pairing_verified,
+                                "paired": is_paired,
                                 "pairing_required": pairing_required,
                                 "enrollment_completed": enrollment_required,
                                 "device_token_issued": issued_device_token,
@@ -434,7 +435,7 @@ class RemoteAudioServer:
                             event="hello_ack_sent",
                             source_id=source_id,
                             connection_id=session.connection_id,  # Phase 3
-                            paired=pairing_verified,
+                            paired=is_paired,
                             pairing_required=pairing_required,
                         )
                         continue
