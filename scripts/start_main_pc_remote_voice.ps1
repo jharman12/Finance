@@ -49,5 +49,7 @@ Write-Host "Starting Finance app with remote audio enabled..."
 Write-Host "Repo: $repoRoot"
 Write-Host "Bind: ${BindHost}:$Port"
 Write-Host "TLS cert: $TlsCertPath"
+Write-Host "On Windows, the app will try to add a firewall allow rule for TCP $Port."
+Write-Host "If Windows denies it, run once as Administrator to approve inbound remote voice traffic."
 
 & $pythonExe "main.py"

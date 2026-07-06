@@ -120,6 +120,61 @@ class VoiceRemoteTransportTests(unittest.TestCase):
 
         self.assertEqual(self.received, [])
 
+    def test_revoked_device_token_rejects_reauth(self) -> None:
+        server = RemoteAudioServer(host="127.0.0.1", port=0, auth_token="1234567890abcdef")
+        issued_token = server._device_token_store.issue_token("node-1")
+        server.on_packet = self.received.append
+        server.start()
+        try:
+            self._send(
+                "127.0.0.1",
+                server.bound_port,
+                [
+                    {"type": "hello", "source_id": "node-1", "token": issued_token},
+                    {
+                        "type": "audio",
+                        "seq_no": 1,
+                        "audio_b64": base64.b64encode(b"first").decode("ascii"),
+                    },
+                ],
+            )
+            time.sleep(0.1)
+
+            self.assertEqual(len(self.received), 1)
+            self.assertTrue(server.revoke_device_token("node-1"))
+
+            ack = self._send_and_read_first_line(
+                "127.0.0.1",
+                server.bound_port,
+                {"type": "hello", "source_id": "node-1", "token": issued_token},
+            )
+            self.assertEqual(ack.get("type"), "hello_ack")
+            self.assertTrue(bool(ack.get("auth_rejected", False)))
+            self.assertFalse(bool(ack.get("paired", True)))
+
+            # Server may close immediately after rejected hello, which can raise
+            # on the client send path. Either way, no further packet should pass.
+            try:
+                self._send(
+                    "127.0.0.1",
+                    server.bound_port,
+                    [
+                        {"type": "hello", "source_id": "node-1", "token": issued_token},
+                        {
+                            "type": "audio",
+                            "seq_no": 2,
+                            "audio_b64": base64.b64encode(b"second").decode("ascii"),
+                        },
+                    ],
+                )
+            except OSError:
+                pass
+            time.sleep(0.1)
+        finally:
+            server.stop()
+
+        self.assertEqual(len(self.received), 1)
+
     def test_rejects_non_monotonic_sequence(self) -> None:
         server = RemoteAudioServer(host="127.0.0.1", port=0, auth_token="1234567890abcdef")
         issued_token = server._device_token_store.issue_token("node-1")

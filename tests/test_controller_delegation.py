@@ -138,6 +138,23 @@ class ControllerDelegationTests(unittest.TestCase):
         repository.materialize_due_recurring_items.assert_called_once_with()
         self.assertEqual(value, "1.00")
 
+    def test_app_controller_delegates_paired_device_management(self) -> None:
+        repository = Mock()
+        fake_device = SimpleNamespace(source_id="node-1")
+        repository.list_paired_remote_devices.return_value = [fake_device]
+        repository.get_paired_remote_device.return_value = fake_device
+        controller = AppController(repository)
+
+        listed = controller.list_paired_remote_devices(active_only=True)
+        fetched = controller.get_paired_remote_device("node-1")
+        controller.remove_paired_remote_device("node-1")
+
+        repository.list_paired_remote_devices.assert_called_once_with(active_only=True)
+        repository.get_paired_remote_device.assert_called_once_with("node-1")
+        repository.remove_paired_remote_device.assert_called_once_with("node-1")
+        self.assertEqual(listed, [fake_device])
+        self.assertIs(fetched, fake_device)
+
 
 if __name__ == "__main__":
     unittest.main()

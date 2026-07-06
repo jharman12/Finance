@@ -34,6 +34,16 @@ class VoskPhraseWakeDetector:
     def stop(self) -> None:
         self._recognizer = None
 
+    def reset(self) -> None:
+        """Reset recognizer state without reloading the model."""
+        if self._model is None:
+            return
+        try:
+            from vosk import KaldiRecognizer
+        except ImportError:
+            return
+        self._recognizer = KaldiRecognizer(self._model, self.sample_rate)
+
     def detect(self, chunk: bytes) -> bool:
         recognizer = self._recognizer
         if recognizer is None:

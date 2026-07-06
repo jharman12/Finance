@@ -362,7 +362,15 @@ $env:FINANCE_APP_REMOTE_AUDIO_BIND_HOST="0.0.0.0"
 
 ### 5. Windows firewall blocks the port
 
-If needed, allow inbound TCP on port `45881` for your private network.
+The app now tries to add a Windows Defender Firewall inbound rule automatically
+for the configured receiver TCP port when remote voice is enabled.
+
+If Windows blocks automatic setup, run the app once as Administrator or add the
+rule manually for your private network:
+
+```powershell
+netsh advfirewall firewall add rule name="Finance Remote Voice Receiver TCP 45881" dir=in action=allow protocol=TCP localport=45881 profile=private,domain enable=yes
+```
 
 ### 6. Remote says: `Remote audio connection failed: timed out`
 

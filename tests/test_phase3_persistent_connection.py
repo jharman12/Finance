@@ -301,6 +301,34 @@ class TestPersistentRemoteConnection(unittest.TestCase):
         self.assertTrue(result)
         self.assertEqual(mock_connect.call_count, 2)
 
+    def test_connect_rejects_auth_rejected_hello_ack(self) -> None:
+        """Handshake should fail cleanly when server rejects token auth."""
+        conn = PersistentRemoteConnection(
+            host="localhost",
+            port=9999,
+            token="test-token-1234567890",
+            source_id="test-device",
+            allow_untrusted=True,
+        )
+        conn.on_error = MagicMock()
+
+        mock_socket = MagicMock()
+        mock_socket.recv.return_value = b'{"type":"hello_ack","auth_rejected":true}\n'
+        mock_context = MagicMock()
+        mock_context.wrap_socket.return_value = mock_socket
+
+        with patch("finance_app.services.voice.persistent_connection.socket.create_connection", return_value=MagicMock()), patch(
+            "finance_app.services.voice.persistent_connection.ssl.create_default_context",
+            return_value=mock_context,
+        ), patch.object(conn, "_persist_peer_certificate", return_value=None):
+            result = conn._connect()
+
+        self.assertFalse(result)
+        self.assertFalse(conn.connected)
+        self.assertIsNone(conn._socket)
+        conn.on_error.assert_called()
+        self.assertIn("auth_rejected", conn.on_error.call_args[0][0])
+
 
 class TestRemoteWakeStreamSenderPersistentWiring(unittest.TestCase):
     """Test that the sender wires streams through the persistent transport."""
@@ -426,6 +454,44 @@ class TestRemoteWakeStreamSenderPersistentWiring(unittest.TestCase):
                 sender._handle_chunk(b"chunk")
 
             self.assertGreater(sender._cooldown_until, 0.0)
+
+    def test_close_stream_uses_lightweight_wake_reset_when_supported(self) -> None:
+        config = SenderConfig(
+            host="localhost",
+            port=9999,
+            token="test-token-1234567890",
+            source_id="test-device",
+            ca_cert_path="",
+            tls_server_name=None,
+            wake_phrase="hey steven",
+            wake_mode="phrase_vosk",
+            vosk_model_path="models/vosk-model-en-us-0.22-lgraph",
+            openwakeword_model_path=None,
+            wake_threshold=0.5,
+            sample_rate=16000,
+            blocksize=1600,
+            preroll_ms=2000,
+            post_wake_grace_ms=1200,
+            max_stream_seconds=12.0,
+            cooldown_seconds=0.8,
+            endpoint_min_speech_ms=300,
+            endpoint_silence_ms=700,
+            endpoint_max_utterance_ms=12000,
+            energy_threshold=450.0,
+        )
+
+        wake_detector = MagicMock()
+        wake_detector.reset = MagicMock()
+        wake_detector.stop = MagicMock()
+        wake_detector.start = MagicMock()
+
+        with patch.object(RemoteWakeStreamSender, "_build_wake_detector", return_value=wake_detector):
+            sender = RemoteWakeStreamSender(config)
+            sender._close_stream(reason="silence")
+
+            wake_detector.reset.assert_called_once_with()
+            wake_detector.stop.assert_not_called()
+            wake_detector.start.assert_not_called()
 
 
 class TestPhase3Protocol(unittest.TestCase):

@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from finance_app.services.voice.asr_provider import AsrResult
 from finance_app.services.voice.vad_endpointing import EndpointDecision
@@ -155,6 +157,52 @@ class VoicePipelineIntegrationTests(unittest.TestCase):
         event = events[0]
         self.assertEqual(getattr(event, "text", None), "add groceries expense")
         self.assertEqual(getattr(event, "source_id", None), "remote-node")
+
+    def test_windows_firewall_success_emits_status_and_diagnostic(self) -> None:
+        coordinator = self._build_coordinator()
+        statuses: list[str] = []
+        diagnostics: list[dict[str, object]] = []
+        coordinator.on_status = statuses.append
+        coordinator.on_diagnostic = diagnostics.append
+
+        firewall_result = SimpleNamespace(
+            success=True,
+            status="added",
+            message="Windows firewall rule ready for remote voice receiver on TCP 45881.",
+            requires_admin=False,
+        )
+
+        with patch(
+            "finance_app.services.voice_pipeline.ensure_remote_voice_receiver_rule",
+            return_value=firewall_result,
+        ):
+            coordinator._ensure_windows_firewall_rule(45881)  # noqa: SLF001
+
+        self.assertIn(firewall_result.message, statuses)
+        self.assertTrue(any(d.get("event") == "windows_firewall" and d.get("success") is True for d in diagnostics))
+
+    def test_windows_firewall_not_applicable_stays_silent(self) -> None:
+        coordinator = self._build_coordinator()
+        statuses: list[str] = []
+        diagnostics: list[dict[str, object]] = []
+        coordinator.on_status = statuses.append
+        coordinator.on_diagnostic = diagnostics.append
+
+        firewall_result = SimpleNamespace(
+            success=True,
+            status="not_applicable",
+            message="Windows firewall automation skipped on non-Windows platform.",
+            requires_admin=False,
+        )
+
+        with patch(
+            "finance_app.services.voice_pipeline.ensure_remote_voice_receiver_rule",
+            return_value=firewall_result,
+        ):
+            coordinator._ensure_windows_firewall_rule(45881)  # noqa: SLF001
+
+        self.assertEqual(statuses, [])
+        self.assertEqual(diagnostics, [])
 
 
 if __name__ == "__main__":

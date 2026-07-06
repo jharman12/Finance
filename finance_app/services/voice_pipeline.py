@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
+from finance_app.infrastructure.windows_firewall import ensure_remote_voice_receiver_rule
 from finance_app.services.voice.asr_faster_whisper import FasterWhisperAsrProvider
 from finance_app.services.voice.asr_router import AsrRouter
 from finance_app.services.voice.asr_vosk import VoskAsrProvider
@@ -166,11 +167,19 @@ class VoiceCoordinator:
         self._continuation_deadline = 0.0
         self._stopping = False
         self._wake_detector_started = False
+        self._firewall_rule_port: int | None = None
 
         telemetry_path = os.getenv("FINANCE_APP_VOICE_TELEMETRY_PATH", str(Path("logs") / "voice_events.jsonl"))
         self.telemetry = VoiceTelemetryLogger(Path(telemetry_path))
 
-        asr_primary = os.getenv("FINANCE_APP_VOICE_ASR_PRIMARY", "faster_whisper").strip().lower()
+        default_primary = "vosk" if os.name == "nt" else "faster_whisper"
+        asr_primary = os.getenv("FINANCE_APP_VOICE_ASR_PRIMARY", default_primary).strip().lower()
+        asr_enable_fallback = os.getenv("FINANCE_APP_VOICE_ASR_ENABLE_FALLBACK", "0").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
         fw_provider = FasterWhisperAsrProvider(
             model_size=os.getenv("FINANCE_APP_FW_MODEL_SIZE", "small.en"),
             device=os.getenv("FINANCE_APP_FW_DEVICE", "cpu"),
@@ -181,10 +190,10 @@ class VoiceCoordinator:
 
         if asr_primary == "vosk":
             primary_provider = vosk_provider
-            fallback_provider = fw_provider
+            fallback_provider = fw_provider if asr_enable_fallback else None
         else:
             primary_provider = fw_provider
-            fallback_provider = vosk_provider
+            fallback_provider = vosk_provider if asr_enable_fallback else None
 
         self.asr_router = AsrRouter(primary=primary_provider, fallback=fallback_provider)
 
@@ -256,6 +265,7 @@ class VoiceCoordinator:
             host=self.remote_stream.server.host,
             port=self.remote_stream.bound_port,
         )
+        self._ensure_windows_firewall_rule(self.remote_stream.bound_port)
         return True, ""
 
     def start(self) -> None:
@@ -291,6 +301,7 @@ class VoiceCoordinator:
                     on_error=self._handle_stream_error,
                     on_diagnostic=self._handle_remote_stream_diagnostic,
                 )
+                self._ensure_windows_firewall_rule(self.remote_stream.bound_port)
             except Exception as exc:
                 self._handle_stream_error(f"Remote audio server failed to start: {exc}")
                 return
@@ -845,6 +856,30 @@ class VoiceCoordinator:
             tls_key_path=tls_key_path,
             pairing_manager=self.pairing_manager,
         )
+
+    def _ensure_windows_firewall_rule(self, port: int) -> None:
+        if port <= 0 or port == self._firewall_rule_port:
+            return
+
+        result = ensure_remote_voice_receiver_rule(port)
+        if result.status == "not_applicable":
+            return
+
+        if result.success:
+            self._firewall_rule_port = port
+
+        self._emit_diagnostic(
+            event="windows_firewall",
+            stage="windows_firewall",
+            status=result.status,
+            success=result.success,
+            requires_admin=result.requires_admin,
+            port=port,
+            message=result.message,
+        )
+
+        if result.status in {"added", "already_exists", "requires_admin", "failed", "execution_error", "netsh_unavailable"}:
+            self._emit_status(result.message)
 
     def _in_cooldown_locked(self) -> bool:
         if self._cooldown_until <= 0.0:

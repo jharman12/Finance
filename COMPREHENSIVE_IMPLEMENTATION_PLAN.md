@@ -33,10 +33,10 @@ This document transforms your masterplan vision into a phased, prioritized imple
 - [ ] Implement 6-digit device pairing code protocol
 
 **Network Architecture Setup (Days 2-3)** - Network Handler Priority
-- [ ] **FIX CRITICAL BUG:** Change service type from `_finance-voice` to `_fvoice` (8 chars max, currently exceeds 15-char limit causing BadTypeInNameException)
-- [ ] Implement persistent device token storage
-- [ ] Add Windows firewall rule automation (netsh)
-- [ ] Create CLI for device management (unpair, list-devices, rotate-token)
+- [x] **FIX CRITICAL BUG:** Change service type from `_finance-voice` to `_fvoice` (8 chars max, currently exceeds 15-char limit causing BadTypeInNameException)
+- [x] Implement persistent device token storage
+- [x] Add Windows firewall rule automation (netsh)
+- [x] Create CLI for device management (unpair, list-devices, rotate-token)
 - [ ] Validate hub-and-spoke architecture aligns with production patterns (AirPlay 2 / Google Cast)
 
 **Remote Audio Processing Setup (Days 3-4)** - Speech To Text Handler Priority
@@ -683,8 +683,8 @@ PHASE 3 (Weeks 9-16): Advanced Features
 |----------|-----|--------|--------|
 | ✅ DONE | Change `_finance-voice` → `_fvoice` | Prevents service registration failure | 1 line |
 | ✅ DONE | Persist device tokens | Prevent re-pairing on app restart | 100 lines |
-| 🔴 CRITICAL | Windows firewall automation | Users blocked by Windows firewall by default | 60 lines |
-| 🟠 HIGH | CLI device management | Operational control (unpair, list, rotate) | 80 lines |
+| ✅ DONE | Windows firewall automation | Users blocked by Windows firewall by default | 60 lines |
+| ✅ DONE | CLI device management | Operational control (unpair, list, rotate) | 80 lines |
 
 ---
 
@@ -736,7 +736,7 @@ PHASE 3 (Weeks 9-16): Advanced Features
 3. 🐛 **Fix critical bugs** (Week 1 Day 1):
   - [x] `_finance-voice` → `_fvoice` (1 line)
   - [x] Add token persistence (100 lines)
-   - [ ] Windows firewall automation (60 lines)
+  - [x] Windows firewall automation (60 lines)
 
 4. 🔒 **Automate Windows firewall rules** and verify discovery from a fresh install
 

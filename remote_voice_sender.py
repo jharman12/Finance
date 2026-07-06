@@ -724,6 +724,15 @@ class RemoteWakeStreamSender:
 
     def _reset_wake_detector_state(self) -> None:
         """Reset detector session state between streams to prevent stale matches."""
+        reset_method = getattr(self.wake_detector, "reset", None)
+        if callable(reset_method):
+            try:
+                reset_method()
+                return
+            except Exception as exc:
+                _debug(f"Wake detector lightweight reset failed: {exc}")
+
+        # Fall back to previous behavior only when no reset hook exists.
         try:
             self.wake_detector.stop()
         except Exception:
