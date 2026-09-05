@@ -71,10 +71,10 @@ This document transforms your masterplan vision into a phased, prioritized imple
 - [x] Implement 4-level error cascade (Ollama → Cloud → Deterministic → Error)
 
 **Agent Foundation** - Codebase Architect Priority
-- [ ] Design `BaseAgent` abstract class for extensible agents
-- [ ] Create `AgentOrchestrator` for multi-agent coordination
-- [ ] Begin Finance agent implementation as proof-of-concept
-- [ ] Plan agent routing logic (how Finance agent, Calendar agent, etc. receive requests)
+- [x] Design `BaseAgent` abstract class for extensible agents
+- [x] Create `AgentOrchestrator` for multi-agent coordination
+- [x] Begin Finance agent implementation as proof-of-concept
+- [x] Plan agent routing logic (how Finance agent, Calendar agent, etc. receive requests)
 
 **Deliverables:**
 - LLM service handling both local and remote voice requests

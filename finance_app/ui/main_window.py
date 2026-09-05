@@ -50,6 +50,8 @@ from PyQt5.QtWidgets import (
 from finance_app.config import APP_NAME
 from finance_app.chart_models import CashflowChartsPayload, PositionChartsPayload
 from finance_app.models import Asset, AssistantResult, PairedRemoteDevice, Transaction
+from finance_app.agents.finance_agent import FinanceAgent
+from finance_app.agents.orchestrator import AgentOrchestrator
 from finance_app.services.assistant_service import AssistantService
 from finance_app.services.assistant_llm_service import AssistantLLMService
 from finance_app.services.assistant_sessions import (
@@ -101,7 +103,9 @@ class MainWindow(QMainWindow):
         self.recurring_controller = RecurringController(self.repository)
         self.transaction_controller = TransactionController(self.repository)
         self.assistant_service = AssistantService(self.repository)
-        self.llm_service = AssistantLLMService(self.assistant_service)
+        self.assistant_llm_service = AssistantLLMService(self.assistant_service)
+        self.llm_service = AgentOrchestrator(self.assistant_llm_service)
+        self.llm_service.register(FinanceAgent(self.assistant_llm_service))
         self._wake_phrase = self._load_wake_phrase_setting()
         self.voice_coordinator = VoiceCoordinator(wake_phrase=self._wake_phrase)
         self._ui_scale = self._load_ui_scale_setting()

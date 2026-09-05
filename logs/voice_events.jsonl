@@ -1228,3 +1228,50 @@
 {"ts": "2026-09-05T14:55:33.502996+00:00", "event": "voice_stopped"}
 {"ts": "2026-09-05T14:55:37.661697+00:00", "event": "voice_stopped"}
 {"ts": "2026-09-05T14:55:42.521126+00:00", "event": "voice_stopped"}
+{"ts": "2026-09-05T15:39:43.706087+00:00", "event": "voice_command_duplicate_ignored", "source_id": "node-3", "session_id": "voice-dup-1", "text": "show me my spending summary"}
+{"ts": "2026-09-05T15:39:44.142252+00:00", "event": "voice_stopped"}
+{"ts": "2026-09-05T15:39:47.699792+00:00", "event": "voice_command_confirmation_requested", "source_id": "node-1", "session_id": "voice-1", "confidence": 0.72}
+{"ts": "2026-09-05T15:39:47.701546+00:00", "event": "voice_command_confirmed", "source_id": "node-1", "session_id": "voice-1", "confirmation_text": "confirm"}
+{"ts": "2026-09-05T15:39:48.176025+00:00", "event": "voice_stopped"}
+{"ts": "2026-09-05T15:39:52.064010+00:00", "event": "voice_command_confirmation_requested", "source_id": "node-2", "session_id": "voice-3", "confidence": 0.72}
+{"ts": "2026-09-05T15:39:52.065350+00:00", "event": "voice_command_canceled", "source_id": "node-2", "session_id": "voice-3", "rejection_text": "cancel"}
+{"ts": "2026-09-05T15:39:52.392704+00:00", "event": "voice_stopped"}
+{"ts": "2026-09-05T15:40:04.812200+00:00", "event": "voice_stopped"}
+{"ts": "2026-09-05T15:40:08.839994+00:00", "event": "voice_stopped"}
+{"ts": "2026-09-05T15:40:13.896129+00:00", "event": "voice_stopped"}
+{"ts": "2026-09-05T15:41:05.417831+00:00", "event": "voice_command_duplicate_ignored", "source_id": "node-3", "session_id": "voice-dup-1", "text": "show me my spending summary"}
+{"ts": "2026-09-05T15:41:05.792462+00:00", "event": "voice_stopped"}
+{"ts": "2026-09-05T15:41:09.392726+00:00", "event": "voice_command_confirmation_requested", "source_id": "node-1", "session_id": "voice-1", "confidence": 0.72}
+{"ts": "2026-09-05T15:41:09.394729+00:00", "event": "voice_command_confirmed", "source_id": "node-1", "session_id": "voice-1", "confirmation_text": "confirm"}
+{"ts": "2026-09-05T15:41:09.748199+00:00", "event": "voice_stopped"}
+{"ts": "2026-09-05T15:41:13.626236+00:00", "event": "voice_command_confirmation_requested", "source_id": "node-2", "session_id": "voice-3", "confidence": 0.72}
+{"ts": "2026-09-05T15:41:13.627330+00:00", "event": "voice_command_canceled", "source_id": "node-2", "session_id": "voice-3", "rejection_text": "cancel"}
+{"ts": "2026-09-05T15:41:13.973029+00:00", "event": "voice_stopped"}
+{"ts": "2026-09-05T15:41:17.886821+00:00", "event": "voice_stopped"}
+{"ts": "2026-09-05T15:41:21.835844+00:00", "event": "voice_stopped"}
+{"ts": "2026-09-05T15:41:25.845469+00:00", "event": "voice_stopped"}
+{"ts": "2026-09-05T15:41:43.814357+00:00", "event": "voice_stopped"}
+{"ts": "2026-09-05T15:41:47.746298+00:00", "event": "voice_stopped"}
+{"ts": "2026-09-05T15:41:51.946624+00:00", "event": "voice_stopped"}
+{"ts": "2026-09-05T15:42:50.124485+00:00", "event": "voice_stopped"}
+{"ts": "2026-09-05T15:42:54.099717+00:00", "event": "voice_stopped"}
+{"ts": "2026-09-05T15:42:58.322457+00:00", "event": "voice_stopped"}
+{"ts": "2026-09-05T15:43:01.818690+00:00", "event": "voice_command_duplicate_ignored", "source_id": "node-3", "session_id": "voice-dup-1", "text": "show me my spending summary"}
+{"ts": "2026-09-05T15:43:02.276997+00:00", "event": "voice_stopped"}
+{"ts": "2026-09-05T15:43:05.907401+00:00", "event": "voice_command_confirmation_requested", "source_id": "node-1", "session_id": "voice-1", "confidence": 0.72}
+{"ts": "2026-09-05T15:43:05.908612+00:00", "event": "voice_command_confirmed", "source_id": "node-1", "session_id": "voice-1", "confirmation_text": "confirm"}
+{"ts": "2026-09-05T15:43:06.322260+00:00", "event": "voice_stopped"}
+{"ts": "2026-09-05T15:43:09.983428+00:00", "event": "voice_command_confirmation_requested", "source_id": "node-2", "session_id": "voice-3", "confidence": 0.72}
+{"ts": "2026-09-05T15:43:09.984512+00:00", "event": "voice_command_canceled", "source_id": "node-2", "session_id": "voice-3", "rejection_text": "cancel"}
+{"ts": "2026-09-05T15:43:10.350494+00:00", "event": "voice_stopped"}
+{"ts": "2026-09-05T15:43:48.623621+00:00", "event": "voice_stopped"}
+{"ts": "2026-09-05T15:43:52.623802+00:00", "event": "voice_stopped"}
+{"ts": "2026-09-05T15:43:56.804310+00:00", "event": "voice_stopped"}
+{"ts": "2026-09-05T15:44:00.396408+00:00", "event": "voice_command_duplicate_ignored", "source_id": "node-3", "session_id": "voice-dup-1", "text": "show me my spending summary"}
+{"ts": "2026-09-05T15:44:00.837214+00:00", "event": "voice_stopped"}
+{"ts": "2026-09-05T15:44:04.505225+00:00", "event": "voice_command_confirmation_requested", "source_id": "node-1", "session_id": "voice-1", "confidence": 0.72}
+{"ts": "2026-09-05T15:44:04.507230+00:00", "event": "voice_command_confirmed", "source_id": "node-1", "session_id": "voice-1", "confirmation_text": "confirm"}
+{"ts": "2026-09-05T15:44:04.887373+00:00", "event": "voice_stopped"}
+{"ts": "2026-09-05T15:44:08.439154+00:00", "event": "voice_command_confirmation_requested", "source_id": "node-2", "session_id": "voice-3", "confidence": 0.72}
+{"ts": "2026-09-05T15:44:08.440160+00:00", "event": "voice_command_canceled", "source_id": "node-2", "session_id": "voice-3", "rejection_text": "cancel"}
+{"ts": "2026-09-05T15:44:08.847142+00:00", "event": "voice_stopped"}
