@@ -171,6 +171,11 @@ class AssistantService:
         )
         return any(keyword in text for keyword in mutation_keywords)
 
+    def build_deterministic_result(self, prompt_text: str) -> AssistantResult:
+        """LLM-free answer built from repository data, used as a cascade fallback."""
+        reply = self._build_local_budget_analysis()
+        return AssistantResult(reply=reply, actions=[], raw_payload={"source": "deterministic"})
+
     def _is_analysis_question(self, prompt_text: str) -> bool:
         """Check if this is an analysis/advice question (not a mutation)."""
         if self._is_mutation_request(prompt_text):

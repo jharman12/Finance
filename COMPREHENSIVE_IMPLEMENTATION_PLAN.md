@@ -66,9 +66,9 @@ This document transforms your masterplan vision into a phased, prioritized imple
 **LLM Architecture Setup** - AI Handler Priority
 - [x] Create unified `LLMService` abstraction for local + remote voice inputs
 - [x] Implement session manager with per-device context isolation
-- [ ] Build priority queue: LOCAL(10) > REMOTE(6) with age-based fairness
-- [ ] Create response formatter with dual outputs (text for display + audio script for TTS)
-- [ ] Implement 4-level error cascade (Ollama → Cloud → Deterministic → Error)
+- [x] Build priority queue: LOCAL(10) > REMOTE(6) with age-based fairness
+- [x] Create response formatter with dual outputs (text for display + audio script for TTS)
+- [x] Implement 4-level error cascade (Ollama → Cloud → Deterministic → Error)
 
 **Agent Foundation** - Codebase Architect Priority
 - [ ] Design `BaseAgent` abstract class for extensible agents

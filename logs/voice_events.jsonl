@@ -1173,3 +1173,58 @@
 {"ts": "2026-07-06T00:47:58.160943+00:00", "event": "voice_stopped"}
 {"ts": "2026-07-06T00:48:02.139051+00:00", "event": "voice_stopped"}
 {"ts": "2026-08-16T17:14:19.217386+00:00", "event": "voice_stopped"}
+{"ts": "2026-09-05T14:52:56.834599+00:00", "event": "voice_command_duplicate_ignored", "source_id": "node-3", "session_id": "voice-dup-1", "text": "show me my spending summary"}
+{"ts": "2026-09-05T14:52:57.287186+00:00", "event": "voice_stopped"}
+{"ts": "2026-09-05T14:53:00.477137+00:00", "event": "voice_command_confirmation_requested", "source_id": "node-1", "session_id": "voice-1", "confidence": 0.72}
+{"ts": "2026-09-05T14:53:00.477137+00:00", "event": "voice_command_confirmed", "source_id": "node-1", "session_id": "voice-1", "confirmation_text": "confirm"}
+{"ts": "2026-09-05T14:53:00.785517+00:00", "event": "voice_stopped"}
+{"ts": "2026-09-05T14:53:04.271441+00:00", "event": "voice_command_confirmation_requested", "source_id": "node-2", "session_id": "voice-3", "confidence": 0.72}
+{"ts": "2026-09-05T14:53:04.273542+00:00", "event": "voice_command_canceled", "source_id": "node-2", "session_id": "voice-3", "rejection_text": "cancel"}
+{"ts": "2026-09-05T14:53:04.689181+00:00", "event": "voice_stopped"}
+{"ts": "2026-09-05T14:53:16.927316+00:00", "event": "voice_stopped"}
+{"ts": "2026-09-05T14:53:20.894214+00:00", "event": "voice_stopped"}
+{"ts": "2026-09-05T14:53:25.973358+00:00", "event": "voice_stopped"}
+{"ts": "2026-09-05T14:53:30.842729+00:00", "event": "voice_command_duplicate_ignored", "source_id": "node-3", "session_id": "voice-dup-1", "text": "show me my spending summary"}
+{"ts": "2026-09-05T14:53:31.249543+00:00", "event": "voice_stopped"}
+{"ts": "2026-09-05T14:53:34.616169+00:00", "event": "voice_command_confirmation_requested", "source_id": "node-1", "session_id": "voice-1", "confidence": 0.72}
+{"ts": "2026-09-05T14:53:34.617175+00:00", "event": "voice_command_confirmed", "source_id": "node-1", "session_id": "voice-1", "confirmation_text": "confirm"}
+{"ts": "2026-09-05T14:53:34.987776+00:00", "event": "voice_stopped"}
+{"ts": "2026-09-05T14:53:38.826902+00:00", "event": "voice_command_confirmation_requested", "source_id": "node-2", "session_id": "voice-3", "confidence": 0.72}
+{"ts": "2026-09-05T14:53:38.828914+00:00", "event": "voice_command_canceled", "source_id": "node-2", "session_id": "voice-3", "rejection_text": "cancel"}
+{"ts": "2026-09-05T14:53:39.130144+00:00", "event": "voice_stopped"}
+{"ts": "2026-09-05T14:53:50.530902+00:00", "event": "voice_stopped"}
+{"ts": "2026-09-05T14:53:54.251944+00:00", "event": "voice_stopped"}
+{"ts": "2026-09-05T14:53:58.818649+00:00", "event": "voice_stopped"}
+{"ts": "2026-09-05T14:54:03.766389+00:00", "event": "voice_command_duplicate_ignored", "source_id": "node-3", "session_id": "voice-dup-1", "text": "show me my spending summary"}
+{"ts": "2026-09-05T14:54:04.240287+00:00", "event": "voice_stopped"}
+{"ts": "2026-09-05T14:54:07.610936+00:00", "event": "voice_command_confirmation_requested", "source_id": "node-1", "session_id": "voice-1", "confidence": 0.72}
+{"ts": "2026-09-05T14:54:07.612632+00:00", "event": "voice_command_confirmed", "source_id": "node-1", "session_id": "voice-1", "confirmation_text": "confirm"}
+{"ts": "2026-09-05T14:54:08.102537+00:00", "event": "voice_stopped"}
+{"ts": "2026-09-05T14:54:11.646238+00:00", "event": "voice_command_confirmation_requested", "source_id": "node-2", "session_id": "voice-3", "confidence": 0.72}
+{"ts": "2026-09-05T14:54:11.647243+00:00", "event": "voice_command_canceled", "source_id": "node-2", "session_id": "voice-3", "rejection_text": "cancel"}
+{"ts": "2026-09-05T14:54:12.109216+00:00", "event": "voice_stopped"}
+{"ts": "2026-09-05T14:54:23.480754+00:00", "event": "voice_stopped"}
+{"ts": "2026-09-05T14:54:27.382179+00:00", "event": "voice_stopped"}
+{"ts": "2026-09-05T14:54:32.243777+00:00", "event": "voice_stopped"}
+{"ts": "2026-09-05T14:54:37.762029+00:00", "event": "voice_command_duplicate_ignored", "source_id": "node-3", "session_id": "voice-dup-1", "text": "show me my spending summary"}
+{"ts": "2026-09-05T14:54:38.126448+00:00", "event": "voice_stopped"}
+{"ts": "2026-09-05T14:54:41.840800+00:00", "event": "voice_command_confirmation_requested", "source_id": "node-1", "session_id": "voice-1", "confidence": 0.72}
+{"ts": "2026-09-05T14:54:41.842905+00:00", "event": "voice_command_confirmed", "source_id": "node-1", "session_id": "voice-1", "confirmation_text": "confirm"}
+{"ts": "2026-09-05T14:54:42.311609+00:00", "event": "voice_stopped"}
+{"ts": "2026-09-05T14:54:46.007271+00:00", "event": "voice_command_confirmation_requested", "source_id": "node-2", "session_id": "voice-3", "confidence": 0.72}
+{"ts": "2026-09-05T14:54:46.009002+00:00", "event": "voice_command_canceled", "source_id": "node-2", "session_id": "voice-3", "rejection_text": "cancel"}
+{"ts": "2026-09-05T14:54:46.411661+00:00", "event": "voice_stopped"}
+{"ts": "2026-09-05T14:54:58.495969+00:00", "event": "voice_stopped"}
+{"ts": "2026-09-05T14:55:02.628301+00:00", "event": "voice_stopped"}
+{"ts": "2026-09-05T14:55:07.260027+00:00", "event": "voice_stopped"}
+{"ts": "2026-09-05T14:55:12.888876+00:00", "event": "voice_command_duplicate_ignored", "source_id": "node-3", "session_id": "voice-dup-1", "text": "show me my spending summary"}
+{"ts": "2026-09-05T14:55:13.360608+00:00", "event": "voice_stopped"}
+{"ts": "2026-09-05T14:55:16.884220+00:00", "event": "voice_command_confirmation_requested", "source_id": "node-1", "session_id": "voice-1", "confidence": 0.72}
+{"ts": "2026-09-05T14:55:16.884220+00:00", "event": "voice_command_confirmed", "source_id": "node-1", "session_id": "voice-1", "confirmation_text": "confirm"}
+{"ts": "2026-09-05T14:55:17.290239+00:00", "event": "voice_stopped"}
+{"ts": "2026-09-05T14:55:20.974399+00:00", "event": "voice_command_confirmation_requested", "source_id": "node-2", "session_id": "voice-3", "confidence": 0.72}
+{"ts": "2026-09-05T14:55:20.975908+00:00", "event": "voice_command_canceled", "source_id": "node-2", "session_id": "voice-3", "rejection_text": "cancel"}
+{"ts": "2026-09-05T14:55:21.374233+00:00", "event": "voice_stopped"}
+{"ts": "2026-09-05T14:55:33.502996+00:00", "event": "voice_stopped"}
+{"ts": "2026-09-05T14:55:37.661697+00:00", "event": "voice_stopped"}
+{"ts": "2026-09-05T14:55:42.521126+00:00", "event": "voice_stopped"}

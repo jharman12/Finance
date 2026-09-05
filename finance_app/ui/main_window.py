@@ -58,6 +58,8 @@ from finance_app.services.assistant_sessions import (
     voice_confirmation_session_key,
 )
 from finance_app.services.llm_service import LLMRequest
+from finance_app.services.llm_request_queue import VoiceRequestQueue
+from finance_app.services.response_formatter import format_assistant_response
 from finance_app.services.voice.action_safety import (
     evaluate_voice_command_event,
     is_confirmation_phrase,
@@ -120,6 +122,9 @@ class MainWindow(QMainWindow):
         self._pending_assistant_request_context: dict[str, object] | None = None
         self._active_assistant_request_context: dict[str, object] | None = None
         self._assistant_worker: AssistantWorker | None = None
+        self._assistant_request_queue = VoiceRequestQueue()
+        self._assistant_busy = False
+        self._last_audio_script: str = ""
         self._ollama_warmup_worker: OllamaWarmupWorker | None = None
         self._is_closing = False
         self._selected_year = date.today().year
@@ -4696,6 +4701,24 @@ class MainWindow(QMainWindow):
             source_id=(self._active_assistant_request_context or {}).get("source_id", None),
             command_session_id=(self._active_assistant_request_context or {}).get("command_session_id", None),
         )
+
+        if self._assistant_busy:
+            self._assistant_request_queue.enqueue(llm_request)
+            self.status_bar.showMessage(
+                f"Assistant busy. Queued request ({len(self._assistant_request_queue)} waiting).", 4000
+            )
+            return
+
+        self._start_assistant_request(llm_request)
+
+    def _start_assistant_request(self, llm_request: LLMRequest) -> None:
+        self._assistant_busy = True
+        self._active_assistant_request_context = {
+            "request_source": llm_request.request_source,
+            "assistant_session_key": llm_request.session_key,
+            "source_id": llm_request.source_id,
+            "command_session_id": llm_request.command_session_id,
+        }
         self._assistant_worker = AssistantWorker(self.llm_service, llm_request)
         self._assistant_worker.result_ready.connect(self._handle_assistant_result)
         self._assistant_worker.failed.connect(self._handle_assistant_failure)
@@ -5294,6 +5317,8 @@ class MainWindow(QMainWindow):
             action_count=len(result.actions),
             display_tables=len(result.display_tables),
         )
+        formatted = format_assistant_response(result)
+        self._last_audio_script = formatted.audio_script
         formatted_reply = self._format_assistant_reply_html(result.reply)
         response_lines = [f"<b>Assistant:</b> {formatted_reply}"]
         if result.applied_actions:
@@ -5301,10 +5326,17 @@ class MainWindow(QMainWindow):
         for table_payload in result.display_tables:
             response_lines.append(self._format_assistant_table_html(table_payload))
         self.chat_log.append("<br>".join(response_lines))
-        self.status_bar.showMessage("Assistant response complete.", 4000)
+        outcome = getattr(self.llm_service, "last_outcome", None)
+        if outcome is not None and outcome.degraded:
+            self.status_bar.showMessage(
+                f"Assistant answered in fallback mode ({outcome.tier}).", 6000
+            )
+        else:
+            self.status_bar.showMessage("Assistant response complete.", 4000)
         self.send_button.setEnabled(True)
         self._active_assistant_request_context = None
         self.refresh_all()
+        self._dispatch_next_queued_assistant_request()
 
     def _format_assistant_reply_html(self, reply_text: str) -> str:
         """Render assistant text as structured HTML while preserving all content."""
@@ -5536,6 +5568,17 @@ class MainWindow(QMainWindow):
         self.status_bar.showMessage("Assistant failed to respond.", 5000)
         self.send_button.setEnabled(True)
         self._active_assistant_request_context = None
+        self._dispatch_next_queued_assistant_request()
+
+    def _dispatch_next_queued_assistant_request(self) -> None:
+        self._assistant_busy = False
+        if self._is_closing:
+            return
+        next_request = self._assistant_request_queue.pop_next()
+        if next_request is None:
+            return
+        self.chat_log.append(f"<b>You (queued):</b> {html.escape(next_request.prompt_text)}")
+        self._start_assistant_request(next_request)
 
     def _log_assistant_request_event(self, event: str, **fields: object) -> None:
         context = self._active_assistant_request_context
