@@ -64,8 +64,8 @@ This document transforms your masterplan vision into a phased, prioritized imple
 #### Week 2: LLM Integration for Remote Voice
 
 **LLM Architecture Setup** - AI Handler Priority
-- [ ] Create unified `LLMService` abstraction for local + remote voice inputs
-- [ ] Implement session manager with per-device context isolation
+- [x] Create unified `LLMService` abstraction for local + remote voice inputs
+- [x] Implement session manager with per-device context isolation
 - [ ] Build priority queue: LOCAL(10) > REMOTE(6) with age-based fairness
 - [ ] Create response formatter with dual outputs (text for display + audio script for TTS)
 - [ ] Implement 4-level error cascade (Ollama → Cloud → Deterministic → Error)

@@ -3,22 +3,21 @@ from __future__ import annotations
 from PyQt5.QtCore import QThread, pyqtSignal
 from PyQt5.QtWidgets import QFrame, QLabel, QVBoxLayout
 
-from finance_app.services.assistant_service import AssistantService
+from finance_app.services.llm_service import LLMRequest, LLMService
 
 
 class AssistantWorker(QThread):
     result_ready = pyqtSignal(object)
     failed = pyqtSignal(str)
 
-    def __init__(self, assistant_service: AssistantService, prompt_text: str, session_key: str | None = None) -> None:
+    def __init__(self, llm_service: LLMService, request: LLMRequest) -> None:
         super().__init__()
-        self.assistant_service = assistant_service
-        self.prompt_text = prompt_text
-        self.session_key = session_key
+        self.llm_service = llm_service
+        self.request = request
 
     def run(self) -> None:
         try:
-            result = self.assistant_service.handle_prompt(self.prompt_text, session_key=self.session_key)
+            result = self.llm_service.submit(self.request)
         except Exception as exc:  # pragma: no cover - surface to the UI
             self.failed.emit(str(exc))
             return
@@ -29,13 +28,13 @@ class OllamaWarmupWorker(QThread):
     ready = pyqtSignal()
     failed = pyqtSignal(str)
 
-    def __init__(self, assistant_service: AssistantService) -> None:
+    def __init__(self, llm_service: LLMService) -> None:
         super().__init__()
-        self.assistant_service = assistant_service
+        self.llm_service = llm_service
 
     def run(self) -> None:
         try:
-            self.assistant_service.client.ensure_running()
+            self.llm_service.ensure_running()
         except Exception as exc:  # pragma: no cover - surface to the UI
             self.failed.emit(str(exc))
             return

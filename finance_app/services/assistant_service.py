@@ -8,6 +8,7 @@ from typing import Any
 
 from finance_app.config import SYSTEM_PROMPT
 from finance_app.models import AssistantResult
+from finance_app.services.assistant_sessions import typed_assistant_session_key
 from finance_app.services.budget_reallocator import generate_reallocation_plan
 from finance_app.services.ollama_client import OllamaClient, OllamaMessage
 from finance_app.storage import FinanceRepository
@@ -24,7 +25,7 @@ class AssistantService:
     def __init__(self, repository: FinanceRepository, client: OllamaClient | None = None) -> None:
         self.repository = repository
         self.client = client or OllamaClient()
-        self._default_session_key = "typed-assistant"
+        self._default_session_key = typed_assistant_session_key()
         self._conversation_histories: dict[str, list[OllamaMessage]] = {}
 
     def build_context(self) -> AssistantContext:

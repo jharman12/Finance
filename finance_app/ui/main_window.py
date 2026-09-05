@@ -51,6 +51,13 @@ from finance_app.config import APP_NAME
 from finance_app.chart_models import CashflowChartsPayload, PositionChartsPayload
 from finance_app.models import Asset, AssistantResult, PairedRemoteDevice, Transaction
 from finance_app.services.assistant_service import AssistantService
+from finance_app.services.assistant_llm_service import AssistantLLMService
+from finance_app.services.assistant_sessions import (
+    typed_assistant_session_key,
+    voice_assistant_session_key,
+    voice_confirmation_session_key,
+)
+from finance_app.services.llm_service import LLMRequest
 from finance_app.services.voice.action_safety import (
     evaluate_voice_command_event,
     is_confirmation_phrase,
@@ -92,6 +99,7 @@ class MainWindow(QMainWindow):
         self.recurring_controller = RecurringController(self.repository)
         self.transaction_controller = TransactionController(self.repository)
         self.assistant_service = AssistantService(self.repository)
+        self.llm_service = AssistantLLMService(self.assistant_service)
         self._wake_phrase = self._load_wake_phrase_setting()
         self.voice_coordinator = VoiceCoordinator(wake_phrase=self._wake_phrase)
         self._ui_scale = self._load_ui_scale_setting()
@@ -177,8 +185,8 @@ class MainWindow(QMainWindow):
         # Load saved model preference
         saved_model = self.app_controller.get_setting("selected_model")
         if saved_model:
-            self.assistant_service.client.set_model(saved_model)
-            available_models = self.assistant_service.client.list_available_models()
+            self.llm_service.set_model(saved_model)
+            available_models = self.llm_service.list_available_models()
             if saved_model in available_models:
                 self.model_selector.setCurrentText(saved_model)
 
@@ -4625,7 +4633,7 @@ class MainWindow(QMainWindow):
         if not prompt_text:
             return
 
-        session_key = self._pending_assistant_session_key or "typed-assistant"
+        session_key = self._pending_assistant_session_key or typed_assistant_session_key()
         request_context = self._pending_assistant_request_context or {
             "request_source": "typed",
             "assistant_session_key": session_key,
@@ -4637,7 +4645,7 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, APP_NAME, "Ollama is still starting. Try again in a moment.")
             return
 
-        readiness_error = self.assistant_service.client.readiness_error()
+        readiness_error = self.llm_service.readiness_error()
         if readiness_error:
             QMessageBox.warning(self, APP_NAME, readiness_error)
             self.status_bar.showMessage(readiness_error, 5000)
@@ -4645,7 +4653,7 @@ class MainWindow(QMainWindow):
 
         self.send_button.setEnabled(False)
         self.status_bar.showMessage("Checking Ollama before sending the question...", 0)
-        self._ollama_warmup_worker = OllamaWarmupWorker(self.assistant_service)
+        self._ollama_warmup_worker = OllamaWarmupWorker(self.llm_service)
         self._ollama_warmup_worker.ready.connect(
             lambda: self._send_prompt_after_warmup(
                 prompt_text,
@@ -4661,7 +4669,7 @@ class MainWindow(QMainWindow):
             return
 
         self.status_bar.showMessage("Starting Ollama in the background...", 5000)
-        self._ollama_warmup_worker = OllamaWarmupWorker(self.assistant_service)
+        self._ollama_warmup_worker = OllamaWarmupWorker(self.llm_service)
         self._ollama_warmup_worker.ready.connect(self._handle_ollama_ready)
         self._ollama_warmup_worker.failed.connect(self._handle_ollama_failure)
         self._ollama_warmup_worker.start()
@@ -4681,7 +4689,14 @@ class MainWindow(QMainWindow):
             "assistant_session_key": session_key,
         }
 
-        self._assistant_worker = AssistantWorker(self.assistant_service, prompt_text, session_key=session_key)
+        llm_request = LLMRequest(
+            prompt_text=prompt_text,
+            session_key=session_key,
+            request_source=str((self._active_assistant_request_context or {}).get("request_source", "typed")),
+            source_id=(self._active_assistant_request_context or {}).get("source_id", None),
+            command_session_id=(self._active_assistant_request_context or {}).get("command_session_id", None),
+        )
+        self._assistant_worker = AssistantWorker(self.llm_service, llm_request)
         self._assistant_worker.result_ready.connect(self._handle_assistant_result)
         self._assistant_worker.failed.connect(self._handle_assistant_failure)
         self._assistant_worker.start()
@@ -4701,8 +4716,8 @@ class MainWindow(QMainWindow):
 
     def _refresh_available_models(self) -> None:
         """Fetch available models from Ollama and populate the dropdown."""
-        available_models = self.assistant_service.client.list_available_models()
-        current_model = self.assistant_service.client.model
+        available_models = self.llm_service.list_available_models()
+        current_model = self.llm_service.model
         
         self.model_selector.blockSignals(True)
         self.model_selector.clear()
@@ -4725,7 +4740,7 @@ class MainWindow(QMainWindow):
         if not model_name or model_name == "(No models found)":
             return
         
-        self.assistant_service.client.set_model(model_name)
+        self.llm_service.set_model(model_name)
         self.app_controller.set_setting("selected_model", model_name)
         self.status_bar.showMessage(f"Switched to model: {model_name}", 3000)
 
@@ -5135,10 +5150,10 @@ class MainWindow(QMainWindow):
         return self._voice_confirmation_session_key_for_source(source_id)
 
     def _voice_confirmation_session_key_for_source(self, source_id: str) -> str:
-        return f"assistant::{source_id.strip() or 'local-usb-mic'}"
+        return voice_confirmation_session_key(source_id)
 
     def _voice_assistant_session_key(self, source_id: str) -> str:
-        return f"voice::{source_id.strip() or 'local-usb-mic'}"
+        return voice_assistant_session_key(source_id)
 
     def _is_duplicate_voice_command_event(self, event: VoiceCommandEvent) -> bool:
         event_id = event.session_id.strip()
