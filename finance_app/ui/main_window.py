@@ -7,11 +7,12 @@ from datetime import date, datetime
 import calendar
 import html
 import math
+import os
 import re
 
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
-from PyQt5.QtCore import QDate, QEvent, Qt, pyqtSignal
+from PyQt5.QtCore import QDate, QEvent, Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QFont, QKeySequence, QPalette, QColor
 from PyQt5.QtWidgets import (
     QApplication,
@@ -62,6 +63,8 @@ from finance_app.services.assistant_sessions import (
 from finance_app.services.llm_service import LLMRequest
 from finance_app.services.llm_request_queue import VoiceRequestQueue
 from finance_app.services.response_formatter import format_assistant_response
+from finance_app.services.voice.tts_provider import LOCAL_SOURCE_ID, LocalSpeakerSink, NullAudioSink, build_default_provider
+from finance_app.services.voice.tts_service import TextToSpeechService, speak_typed_enabled, tts_enabled
 from finance_app.services.voice.action_safety import (
     evaluate_voice_command_event,
     is_confirmation_phrase,
@@ -78,6 +81,20 @@ from finance_app.ui.controllers.category_controller import CategoryController
 from finance_app.ui.controllers.recurring_controller import RecurringController
 from finance_app.ui.controllers.transaction_controller import TransactionController
 from finance_app.ui.support import AssistantWorker, MetricCard, OllamaWarmupWorker
+from finance_app.ui.voice_indicator import ConnectionStatusWidget, VoiceIndicatorWidget
+
+_VOICE_STATE_TIMEOUTS_MS = {"listening": 30000, "processing": 20000, "done": 2500}
+
+_LISTENING_CUES = (
+    "listening for command",
+    "wake detected",
+    "wake word detected",
+    "speech resumed",
+    "remote stream active",
+    "listener ready",
+    "say 'hey steven'",
+)
+_PROCESSING_CUES = ("transcribing", "thinking", "processing")
 
 
 class MainWindow(QMainWindow):
@@ -87,6 +104,8 @@ class MainWindow(QMainWindow):
     voice_command_signal = pyqtSignal(object)
     voice_partial_signal = pyqtSignal(str)
     voice_diagnostic_signal = pyqtSignal(object)
+    tts_started_signal = pyqtSignal(str, str)
+    tts_finished_signal = pyqtSignal(str, str, bool)
     # Used to marshal pairing confirmation from background network threads to the
     # main thread via a guaranteed-queued Qt signal path, avoiding any direct
     # cross-thread dialog/QTimer interaction.
@@ -108,6 +127,11 @@ class MainWindow(QMainWindow):
         self.llm_service.register(FinanceAgent(self.assistant_llm_service))
         self._wake_phrase = self._load_wake_phrase_setting()
         self.voice_coordinator = VoiceCoordinator(wake_phrase=self._wake_phrase)
+        self.tts_service = TextToSpeechService(
+            provider=build_default_provider(),
+            sink_factory=self._build_tts_sink,
+            telemetry=getattr(self.voice_coordinator, "telemetry", None),
+        )
         self._ui_scale = self._load_ui_scale_setting()
         self._density_mode = self._load_ui_density_setting()
         self._layout_base_metrics: dict[int, tuple[tuple[int, int, int, int], int]] = {}
@@ -165,6 +189,13 @@ class MainWindow(QMainWindow):
 
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
+        self.voice_indicator = VoiceIndicatorWidget()
+        self.connection_status = ConnectionStatusWidget()
+        self.status_bar.addPermanentWidget(self.connection_status)
+        self.status_bar.addPermanentWidget(self.voice_indicator)
+        self._voice_indicator_timer = QTimer(self)
+        self._voice_indicator_timer.setSingleShot(True)
+        self._voice_indicator_timer.timeout.connect(self._handle_voice_indicator_timeout)
         self.status_bar.showMessage("Syncing recurring items with transactions...", 0)
 
         self._build_dashboard_tab()
@@ -186,6 +217,11 @@ class MainWindow(QMainWindow):
         self.voice_command_signal.connect(self._handle_voice_command)
         self.voice_partial_signal.connect(self._handle_voice_partial)
         self.voice_diagnostic_signal.connect(self._handle_voice_diagnostic)
+        self.tts_started_signal.connect(self._handle_tts_started)
+        self.tts_finished_signal.connect(self._handle_tts_finished)
+        self.tts_service.on_speech_started = self.tts_started_signal.emit
+        self.tts_service.on_speech_finished = self.tts_finished_signal.emit
+        self.tts_service.on_error = self.voice_error_signal.emit
 
         self._bind_voice_coordinator_callbacks()
 
@@ -3137,6 +3173,7 @@ class MainWindow(QMainWindow):
             table.setItem(row, 4, last_seen_item)
 
         table.resizeColumnsToContents()
+        self._refresh_device_status_indicator()
 
     def _forget_selected_known_device(self) -> None:
         table = getattr(self, "known_devices_table", None)
@@ -3203,6 +3240,9 @@ class MainWindow(QMainWindow):
         status_label.setObjectName("PageSubtitle")
         voice_row.addWidget(button)
         voice_row.addWidget(status_label, 1)
+        stop_speaking_button = QPushButton("Stop Speaking")
+        stop_speaking_button.clicked.connect(self._stop_speaking)
+        voice_row.addWidget(stop_speaking_button)
         layout.addLayout(voice_row)
 
         wake_row = QHBoxLayout()
@@ -3823,6 +3863,32 @@ class MainWindow(QMainWindow):
             QStatusBar {
                 background: %(bg_surface_strong)s;
                 color: %(text_secondary)s;
+            }
+            QFrame#VoiceIndicator, QFrame#ConnectionStatus {
+                background: %(bg_surface)s;
+                border: 1px solid %(border)s;
+                border-radius: %(radius_medium)dpx;
+            }
+            QFrame#VoiceIndicator[state='listening'] { border-color: %(accent)s; }
+            QFrame#VoiceIndicator[state='processing'] { border-color: %(warning)s; }
+            QFrame#VoiceIndicator[state='done'] { border-color: %(success)s; }
+            QFrame#ConnectionStatus[state='connected'] { border-color: %(success)s; }
+            QFrame#ConnectionStatus[state='reconnecting'] { border-color: %(warning)s; }
+            QFrame#ConnectionStatus[state='disconnected'] { border-color: %(danger)s; }
+            QLabel#VoiceIndicatorGlyph, QLabel#VoiceIndicatorText,
+            QLabel#ConnectionStatusGlyph, QLabel#ConnectionStatusText {
+                color: %(text_muted)s;
+                border: 0;
+            }
+            QLabel#VoiceIndicatorGlyph[state='listening'], QLabel#VoiceIndicatorText[state='listening'] { color: %(accent)s; }
+            QLabel#VoiceIndicatorGlyph[state='processing'], QLabel#VoiceIndicatorText[state='processing'] { color: %(warning)s; }
+            QLabel#VoiceIndicatorGlyph[state='done'], QLabel#VoiceIndicatorText[state='done'] { color: %(success)s; }
+            QLabel#ConnectionStatusGlyph[state='connected'], QLabel#ConnectionStatusText[state='connected'] { color: %(success)s; }
+            QLabel#ConnectionStatusGlyph[state='reconnecting'], QLabel#ConnectionStatusText[state='reconnecting'] { color: %(warning)s; }
+            QLabel#ConnectionStatusGlyph[state='disconnected'], QLabel#ConnectionStatusText[state='disconnected'] { color: %(danger)s; }
+            QLabel#VoiceIndicatorGlyph, QLabel#ConnectionStatusGlyph {
+                font-size: %(section_title_size)dpt;
+                font-weight: 700;
             }
             QMenuBar::item {
                 background: transparent;
@@ -4804,6 +4870,9 @@ class MainWindow(QMainWindow):
             return
         mode = self._voice_active_surface or "testing"
         self._set_voice_surface_status_text(mode, f"Voice: {message}")
+        mapped_state = self._voice_indicator_state_for_status(message)
+        if mapped_state is not None:
+            self._set_voice_indicator_state(mapped_state, message)
         self.status_bar.showMessage(message, 2500)
 
     def _handle_voice_error(self, message: str) -> None:
@@ -4811,6 +4880,7 @@ class MainWindow(QMainWindow):
             return
         mode = self._voice_active_surface or "testing"
         self._set_voice_surface_status_text(mode, "Voice: Error")
+        self._set_voice_indicator_state("ready", message)
         self.status_bar.showMessage(message, 6000)
         if mode == "assistant":
             self.chat_log.append(f"<i>Voice error:</i> {html.escape(message)}")
@@ -4823,6 +4893,7 @@ class MainWindow(QMainWindow):
     def _handle_voice_wake(self, source_id: str) -> None:
         if self._is_closing:
             return
+        self._set_voice_indicator_state("listening", f"Wake from {source_id}")
         mode = self._voice_active_surface or ("assistant" if source_id == "local-usb-mic" else "testing")
         if mode == "assistant":
             self.chat_log.append(f"<i>Wake detected from {html.escape(source_id)}. Listening...</i>")
@@ -4840,6 +4911,7 @@ class MainWindow(QMainWindow):
         if not text:
             self._set_voice_surface_partial_text(mode, "Live transcript: (waiting)")
             return
+        self._set_voice_indicator_state("listening", text)
         self._set_voice_surface_partial_text(mode, f"Live transcript: {text}")
 
     def _handle_voice_diagnostic(self, payload: object) -> None:
@@ -5085,6 +5157,7 @@ class MainWindow(QMainWindow):
 
         self._set_voice_surface_last_command_text(mode, f"Last voice command: {command_text}")
         self._set_voice_surface_partial_text(mode, "Live transcript: (sent)")
+        self._set_voice_indicator_state("processing" if mode == "assistant" else "done", command_text)
 
         if command_event is not None:
             self._handle_voice_diagnostic(
@@ -5313,6 +5386,8 @@ class MainWindow(QMainWindow):
             self._set_voice_surface_button_text(mode, self._voice_start_button_label())
             self._set_voice_surface_status_text(mode, "Voice: Off")
             self._set_voice_surface_partial_text(mode, "Live transcript: (off)")
+        if not self.voice_enabled:
+            self._set_voice_indicator_state("ready", "Voice off")
 
     def _handle_assistant_result(self, result: AssistantResult) -> None:
         self._log_assistant_request_event(
@@ -5323,6 +5398,7 @@ class MainWindow(QMainWindow):
         )
         formatted = format_assistant_response(result)
         self._last_audio_script = formatted.audio_script
+        self._maybe_speak_response(formatted.audio_script)
         formatted_reply = self._format_assistant_reply_html(result.reply)
         response_lines = [f"<b>Assistant:</b> {formatted_reply}"]
         if result.applied_actions:
@@ -5340,7 +5416,132 @@ class MainWindow(QMainWindow):
         self.send_button.setEnabled(True)
         self._active_assistant_request_context = None
         self.refresh_all()
+        self._set_voice_indicator_state("done")
         self._dispatch_next_queued_assistant_request()
+
+    def _build_tts_sink(self, source_id: str):
+        # Remote speaker playback arrives in a later slice; anything non-local stays silent.
+        if source_id == LOCAL_SOURCE_ID:
+            return LocalSpeakerSink()
+        return NullAudioSink()
+
+    def _resolve_playback_source(self) -> str | None:
+        context = self._active_assistant_request_context
+        if not isinstance(context, dict) or context.get("request_source") != "voice":
+            return LOCAL_SOURCE_ID if speak_typed_enabled() else None
+        source_id = str(context.get("source_id") or "").strip()
+        return source_id or LOCAL_SOURCE_ID
+
+    def _maybe_speak_response(self, audio_script: str) -> None:
+        if not audio_script or not tts_enabled():
+            return
+
+        source_id = self._resolve_playback_source()
+        if source_id is None:
+            return
+
+        context = self._active_assistant_request_context or {}
+        self.tts_service.speak(
+            audio_script,
+            source_id=source_id,
+            session_id=str(context.get("command_session_id") or ""),
+            utterance_end_monotonic=context.get("utterance_end_monotonic"),
+        )
+
+    def _handle_tts_started(self, speech_id: str, source_id: str) -> None:
+        if self._is_closing:
+            return
+        self.voice_coordinator.set_output_gate(source_id, True)
+        self.status_bar.showMessage("Speaking response...", 3000)
+
+    def _handle_tts_finished(self, speech_id: str, source_id: str, cancelled: bool) -> None:
+        if self._is_closing:
+            return
+        self.voice_coordinator.set_output_gate(source_id, False)
+        self.voice_coordinator.suppress_until(self._tts_echo_tail_seconds())
+        if cancelled:
+            self.status_bar.showMessage("Speech stopped.", 2500)
+
+    def _tts_echo_tail_seconds(self) -> float:
+        try:
+            return max(0.0, int(os.getenv("FINANCE_APP_TTS_ECHO_TAIL_MS", "250")) / 1000.0)
+        except ValueError:
+            return 0.25
+
+    def _stop_speaking(self) -> None:
+        self.tts_service.cancel()
+
+    def _set_voice_indicator_state(self, state: str, detail: str = "") -> None:
+        indicator = getattr(self, "voice_indicator", None)
+        if indicator is None or self._is_closing:
+            return
+        indicator.set_state(state, detail)
+        self._arm_voice_indicator_watchdog(state)
+
+    def _arm_voice_indicator_watchdog(self, state: str) -> None:
+        timer = getattr(self, "_voice_indicator_timer", None)
+        if timer is None:
+            return
+        timer.stop()
+        timeout_ms = _VOICE_STATE_TIMEOUTS_MS.get(state)
+        if timeout_ms:
+            timer.start(timeout_ms)
+
+    def _handle_voice_indicator_timeout(self) -> None:
+        indicator = getattr(self, "voice_indicator", None)
+        if indicator is None or self._is_closing:
+            return
+
+        expired_state = indicator.state()
+        if expired_state == "ready":
+            return
+
+        indicator.set_state("ready")
+        if expired_state != "done":
+            # A stale badge is not evidence the pipeline died, so only the UI resets.
+            self.status_bar.showMessage("Voice indicator reset after inactivity.", 4000)
+            self._log_voice_ui_event("voice_indicator_timeout", state=expired_state)
+
+    def _voice_indicator_state_for_status(self, message: str) -> str | None:
+        text = str(message or "").strip().lower()
+        if not text:
+            return None
+        if any(cue in text for cue in _PROCESSING_CUES):
+            return "processing"
+        if any(cue in text for cue in _LISTENING_CUES):
+            return "listening"
+        return None
+
+    def _remote_device_status_summary(self) -> dict[str, object]:
+        connected = 0
+        authenticated = 0
+        for runtime in self._known_remote_device_runtime.values():
+            if bool(runtime.get("authenticated", False)):
+                authenticated += 1
+            if bool(runtime.get("connected", False)):
+                connected += 1
+
+        known = len(self._known_remote_device_runtime)
+        if known == 0:
+            state = "none"
+        elif connected > 0:
+            state = "connected"
+        elif authenticated > 0:
+            state = "reconnecting"
+        else:
+            state = "disconnected"
+        return {"connected": connected, "known": known, "state": state}
+
+    def _refresh_device_status_indicator(self) -> None:
+        widget = getattr(self, "connection_status", None)
+        if widget is None or self._is_closing:
+            return
+        summary = self._remote_device_status_summary()
+        widget.set_status(
+            str(summary["state"]),
+            int(summary["connected"]),
+            int(summary["known"]),
+        )
 
     def _format_assistant_reply_html(self, reply_text: str) -> str:
         """Render assistant text as structured HTML while preserving all content."""
@@ -5572,6 +5773,7 @@ class MainWindow(QMainWindow):
         self.status_bar.showMessage("Assistant failed to respond.", 5000)
         self.send_button.setEnabled(True)
         self._active_assistant_request_context = None
+        self._set_voice_indicator_state("ready", error_text)
         self._dispatch_next_queued_assistant_request()
 
     def _dispatch_next_queued_assistant_request(self) -> None:
@@ -5598,6 +5800,12 @@ class MainWindow(QMainWindow):
         try:
             self._is_closing = True
             self._unbind_voice_coordinator_callbacks()
+            self._voice_indicator_timer.stop()
+            self.voice_indicator.stop_animation()
+            self.tts_service.on_speech_started = None
+            self.tts_service.on_speech_finished = None
+            self.tts_service.on_error = None
+            self.tts_service.shutdown()
             self.voice_coordinator.stop()
         finally:
             super().closeEvent(event)

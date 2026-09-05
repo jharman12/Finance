@@ -168,6 +168,7 @@ class VoiceCoordinator:
         self._stopping = False
         self._wake_detector_started = False
         self._firewall_rule_port: int | None = None
+        self._gated_output_sources: set[str] = set()
 
         telemetry_path = os.getenv("FINANCE_APP_VOICE_TELEMETRY_PATH", str(Path("logs") / "voice_events.jsonl"))
         self.telemetry = VoiceTelemetryLogger(Path(telemetry_path))
@@ -352,6 +353,24 @@ class VoiceCoordinator:
         """Future expansion point for remote Alexa-like devices."""
         self.router.process_text(VoiceTextEvent(text=text, is_final=is_final, source_id=source_id))
 
+    def set_output_gate(self, source_id: str, active: bool) -> None:
+        """Half-duplex gate: drop inbound audio from a source while it is playing speech."""
+        cleaned = str(source_id or self.source_id).strip() or self.source_id
+        with self._state_lock:
+            if active:
+                self._gated_output_sources.add(cleaned)
+            else:
+                self._gated_output_sources.discard(cleaned)
+
+    def suppress_until(self, seconds: float) -> None:
+        """Extend the cooldown so room reverb cannot retrigger the wake word."""
+        with self._state_lock:
+            self._cooldown_until = max(self._cooldown_until, time.monotonic() + max(0.0, seconds))
+
+    def _is_output_gated(self, source_id: str) -> bool:
+        with self._state_lock:
+            return source_id in self._gated_output_sources
+
     def revoke_remote_device_token(self, source_id: str) -> bool:
         """Revoke a paired remote device token so it can no longer auto-authenticate."""
         cleaned = str(source_id).strip()
@@ -419,6 +438,8 @@ class VoiceCoordinator:
             if self._stopping:
                 return
             if not chunk:
+                return
+            if self._is_output_gated(source_id or self.source_id):
                 return
 
             with self._state_lock:

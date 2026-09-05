@@ -93,16 +93,16 @@ This document transforms your masterplan vision into a phased, prioritized imple
 #### Week 3: Voice I/O Loop & Initial Testing
 
 **Text-to-Speech Integration** - Speech To Text Handler Priority
-- [ ] Integrate TTS with LLM response audio scripts
+- [x] Integrate TTS with LLM response audio scripts
 - [ ] Implement TTS playback on remote device speakers
-- [ ] Create end-to-end voice input → LLM → voice output flow
-- [ ] Test latency: target LOCAL <2.0s, REMOTE <2.5s
+- [x] Create end-to-end voice input → LLM → voice output flow (local; remote pending)
+- [ ] Test latency: target LOCAL <2.0s, REMOTE <2.5s (instrumented, needs real-device measurement)
 
 **UI Updates for Remote Voice** - GUI Handler Priority
-- [ ] Add voice indicator to main window (4-state: Ready → Listening → Processing → Done)
-- [ ] Create device status panel showing connected remote devices
-- [ ] Add connection status indicators (connected/disconnected/reconnecting)
-- [ ] Implement waveform animation during voice processing
+- [x] Add voice indicator to main window (4-state: Ready → Listening → Processing → Done)
+- [x] Create device status panel showing connected remote devices
+- [x] Add connection status indicators (connected/disconnected/reconnecting)
+- [x] Implement waveform animation during voice processing
 
 **Deliverables:**
 - Complete local voice → LLM → TTS → speaker loop

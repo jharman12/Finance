@@ -269,7 +269,7 @@ class TestPersistentRemoteConnection(unittest.TestCase):
         )
 
         mock_socket = MagicMock()
-        mock_socket.recv.return_value = b'{"type":"hello_ack","connection_id":"conn-1"}\n'
+        mock_socket.recv.return_value = b'{"type":"hello_ack","connection_id":"conn-1","paired":true}\n'
         mock_context = MagicMock()
         mock_context.wrap_socket.return_value = mock_socket
 

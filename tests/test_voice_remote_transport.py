@@ -126,19 +126,31 @@ class VoiceRemoteTransportTests(unittest.TestCase):
         server.on_packet = self.received.append
         server.start()
         try:
-            self._send(
-                "127.0.0.1",
-                server.bound_port,
-                [
-                    {"type": "hello", "source_id": "node-1", "token": issued_token},
-                    {
-                        "type": "audio",
-                        "seq_no": 1,
-                        "audio_b64": base64.b64encode(b"first").decode("ascii"),
-                    },
-                ],
-            )
-            time.sleep(0.1)
+            # Read the ack before sending audio so the peer socket is never closed
+            # while the server is still writing, which would abort the handler early.
+            with socket.create_connection(("127.0.0.1", server.bound_port), timeout=2.0) as sock:
+                sock.sendall(
+                    (json.dumps({"type": "hello", "source_id": "node-1", "token": issued_token}) + "\n").encode("utf-8")
+                )
+                raw = b""
+                while b"\n" not in raw:
+                    part = sock.recv(4096)
+                    if not part:
+                        break
+                    raw += part
+                sock.sendall(
+                    (
+                        json.dumps(
+                            {
+                                "type": "audio",
+                                "seq_no": 1,
+                                "audio_b64": base64.b64encode(b"first").decode("ascii"),
+                            }
+                        )
+                        + "\n"
+                    ).encode("utf-8")
+                )
+                time.sleep(0.2)
 
             self.assertEqual(len(self.received), 1)
             self.assertTrue(server.revoke_device_token("node-1"))
@@ -152,8 +164,6 @@ class VoiceRemoteTransportTests(unittest.TestCase):
             self.assertTrue(bool(ack.get("auth_rejected", False)))
             self.assertFalse(bool(ack.get("paired", True)))
 
-            # Server may close immediately after rejected hello, which can raise
-            # on the client send path. Either way, no further packet should pass.
             try:
                 self._send(
                     "127.0.0.1",

@@ -60,6 +60,32 @@ def _token_fingerprint(token: str) -> str:
     return hashlib.sha256(cleaned.encode("utf-8")).hexdigest()[:6]
 
 
+class _ClientChannel:
+    """Serializes writes to one client so concurrent senders cannot interleave a line."""
+
+    def __init__(self, wfile) -> None:
+        self._wfile = wfile
+        self._lock = threading.Lock()
+        self._closed = False
+
+    def send(self, message: dict[str, object]) -> bool:
+        line = (json.dumps(message, ensure_ascii=True) + "\n").encode("utf-8")
+        with self._lock:
+            if self._closed:
+                return False
+            try:
+                self._wfile.write(line)
+                self._wfile.flush()
+                return True
+            except Exception:
+                self._closed = True
+                return False
+
+    def close(self) -> None:
+        with self._lock:
+            self._closed = True
+
+
 class RemoteAudioServer:
     """Authenticated LAN audio ingest server with persistent connections (Phase 3).
 
@@ -108,6 +134,8 @@ class RemoteAudioServer:
         self._session_lock = threading.Lock()
         self._active_sessions: dict[str, SessionResumption] = {}  # connection_id -> SessionResumption
         self._device_token_store = DeviceTokenStore()
+        self._channel_lock = threading.Lock()
+        self._client_channels: dict[str, _ClientChannel] = {}
 
         self.on_packet: Callable[[RemoteAudioPacket], None] | None = None
         self.on_status: Callable[[str], None] | None = None
@@ -171,6 +199,31 @@ class RemoteAudioServer:
         """Revoke a paired per-device token so future auth is rejected."""
         return self._device_token_store.revoke_token(source_id)
 
+    def _register_channel(self, source_id: str, channel: _ClientChannel) -> None:
+        with self._channel_lock:
+            previous = self._client_channels.get(source_id)
+            self._client_channels[source_id] = channel
+        if previous is not None and previous is not channel:
+            previous.close()
+
+    def _unregister_channel(self, source_id: str, channel: _ClientChannel) -> None:
+        with self._channel_lock:
+            if self._client_channels.get(source_id) is channel:
+                del self._client_channels[source_id]
+        channel.close()
+
+    def connected_source_ids(self) -> list[str]:
+        with self._channel_lock:
+            return sorted(self._client_channels.keys())
+
+    def send_to_device(self, source_id: str, message: dict[str, object]) -> bool:
+        """Push a message to a connected device. False when it is not connected."""
+        with self._channel_lock:
+            channel = self._client_channels.get(str(source_id or "").strip())
+        if channel is None:
+            return False
+        return channel.send(message)
+
     def has_device_token(self, source_id: str) -> bool:
         """Check whether a non-revoked per-device token exists."""
         return self._device_token_store.load_token(source_id) is not None
@@ -188,6 +241,16 @@ class RemoteAudioServer:
 
         class Handler(socketserver.StreamRequestHandler):
             def handle(self) -> None:  # noqa: D401
+                channel = _ClientChannel(self.wfile)
+                self._registered_source_id = ""
+                try:
+                    self._handle_client(channel)
+                finally:
+                    if self._registered_source_id:
+                        outer._unregister_channel(self._registered_source_id, channel)
+                    channel.close()
+
+            def _handle_client(self, channel: _ClientChannel) -> None:
                 source_id = ""
                 authenticated = False
                 last_seq = -1
@@ -254,16 +317,7 @@ class RemoteAudioServer:
                         connection_id = str(msg.get("connection_id", "")).strip()
                         if connection_id and authenticated:
                             outer._update_session_activity(connection_id)
-                            try:
-                                pong_msg = {
-                                    "type": "pong",
-                                    "connection_id": connection_id,
-                                }
-                                self.wfile.write(
-                                    (json.dumps(pong_msg, ensure_ascii=True) + "\n").encode("utf-8")
-                                )
-                                self.wfile.flush()
-                            except Exception:
+                            if not channel.send({"type": "pong", "connection_id": connection_id}):
                                 return
                         continue
 
@@ -393,8 +447,7 @@ class RemoteAudioServer:
                                     "pairing_session_id": pairing_hint_session,
                                     "server_token_fingerprint": _token_fingerprint(outer.auth_token),
                                 }
-                                self.wfile.write((json.dumps(hello_ack, ensure_ascii=True) + "\n").encode("utf-8"))
-                                self.wfile.flush()
+                                channel.send(hello_ack)
                             except Exception:
                                 pass
                             return
@@ -447,15 +500,13 @@ class RemoteAudioServer:
                                 "pairing_session_id": pairing_hint_session,
                                 "server_token_fingerprint": _token_fingerprint(outer.auth_token),
                             }
-                            self.wfile.write(
-                                (
-                                    json.dumps(hello_ack, ensure_ascii=True)
-                                    + "\n"
-                                ).encode("utf-8")
-                            )
-                            self.wfile.flush()
+                            if not channel.send(hello_ack):
+                                return
                         except Exception:
                             return
+
+                        outer._register_channel(source_id, channel)
+                        self._registered_source_id = source_id
 
                         outer._emit_diagnostic(
                             event="hello_ack_sent",
@@ -463,6 +514,16 @@ class RemoteAudioServer:
                             connection_id=session.connection_id,  # Phase 3
                             paired=is_paired,
                             pairing_required=pairing_required,
+                        )
+                        continue
+
+                    if msg_type == "speak_ack":
+                        outer._emit_diagnostic(
+                            event="speak_ack",
+                            source_id=source_id,
+                            speech_id=str(msg.get("speech_id", "")),
+                            seq_no=msg.get("seq_no"),
+                            state=str(msg.get("state", "")),
                         )
                         continue
 

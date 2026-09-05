@@ -8,3 +8,4 @@ ctranslate2>=4.4.0
 numpy>=1.26.0
 openwakeword>=0.6.0
 zeroconf>=0.131.0
+pyttsx3>=2.90
