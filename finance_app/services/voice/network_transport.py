@@ -53,6 +53,13 @@ class _ThreadingTcpServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
     daemon_threads = True
 
 
+# Marks a frame as this protocol's audio payload so malformed or foreign traffic is
+# dropped before base64 decoding.
+AUDIO_FRAME_MAGIC = "FVA1"
+MAX_AUTH_ATTEMPTS = 5
+AUTH_ATTEMPT_WINDOW_SECONDS = 10.0
+
+
 def _token_fingerprint(token: str) -> str:
     cleaned = token.strip()
     if not cleaned:
@@ -136,6 +143,8 @@ class RemoteAudioServer:
         self._device_token_store = DeviceTokenStore()
         self._channel_lock = threading.Lock()
         self._client_channels: dict[str, _ClientChannel] = {}
+        self._auth_attempt_lock = threading.Lock()
+        self._auth_attempts: dict[str, deque[float]] = {}
 
         self.on_packet: Callable[[RemoteAudioPacket], None] | None = None
         self.on_status: Callable[[str], None] | None = None
@@ -215,6 +224,28 @@ class RemoteAudioServer:
     def connected_source_ids(self) -> list[str]:
         with self._channel_lock:
             return sorted(self._client_channels.keys())
+
+    def _auth_attempts_exhausted(self, peer: str) -> bool:
+        """True when this peer has burned its failed-hello budget for the window."""
+        now = time.monotonic()
+        with self._auth_attempt_lock:
+            self._prune_auth_attempts(now)
+            attempts = self._auth_attempts.get(peer)
+            return bool(attempts) and len(attempts) >= MAX_AUTH_ATTEMPTS
+
+    def _register_auth_failure(self, peer: str) -> None:
+        """Record a rejected hello. Successful auth never consumes the budget."""
+        now = time.monotonic()
+        with self._auth_attempt_lock:
+            self._prune_auth_attempts(now)
+            self._auth_attempts.setdefault(peer, deque()).append(now)
+
+    def _prune_auth_attempts(self, now: float) -> None:
+        for peer, attempts in list(self._auth_attempts.items()):
+            while attempts and (now - attempts[0]) > AUTH_ATTEMPT_WINDOW_SECONDS:
+                attempts.popleft()
+            if not attempts:
+                del self._auth_attempts[peer]
 
     def send_to_device(self, source_id: str, message: dict[str, object]) -> bool:
         """Push a message to a connected device. False when it is not connected."""
@@ -324,6 +355,12 @@ class RemoteAudioServer:
                     if not authenticated:
                         if msg_type != "hello":
                             outer._emit_error("Remote audio first message must be hello.")
+                            return
+
+                        peer = str(self.client_address[0]) if self.client_address else "unknown"
+                        if outer._auth_attempts_exhausted(peer):
+                            outer._emit_diagnostic(event="auth_rate_limited", peer=peer)
+                            outer._emit_error("Remote audio authentication attempts exceeded the limit.")
                             return
 
                         source_id_candidate = str(msg.get("source_id", "")).strip()
@@ -436,6 +473,7 @@ class RemoteAudioServer:
 
                             outer._emit_diagnostic(event="auth_rejected", source_id=source_id)
                             outer._debug_log(f"Auth rejected for source_id={source_id}")
+                            outer._register_auth_failure(peer)
 
                             try:
                                 hello_ack = {
@@ -530,6 +568,15 @@ class RemoteAudioServer:
                     if msg_type != "audio":
                         continue
 
+                    if str(msg.get("magic", "")) != AUDIO_FRAME_MAGIC:
+                        outer._emit_diagnostic(
+                            event="magic_rejected",
+                            source_id=source_id,
+                            magic=str(msg.get("magic", ""))[:8],
+                        )
+                        outer._emit_error("Remote audio frame had an invalid magic marker.")
+                        return
+
                     try:
                         seq_no = int(msg.get("seq_no"))
                     except Exception:
@@ -599,7 +646,7 @@ class RemoteAudioServer:
             if not cert.exists() or not key.exists():
                 raise ValueError("TLS cert/key paths were provided but file(s) do not exist.")
             context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-            context.minimum_version = ssl.TLSVersion.TLSv1_2
+            context.minimum_version = ssl.TLSVersion.TLSv1_3
             context.load_cert_chain(certfile=str(cert), keyfile=str(key))
             self._server.socket = context.wrap_socket(self._server.socket, server_side=True)
 

@@ -63,7 +63,13 @@ from finance_app.services.assistant_sessions import (
 from finance_app.services.llm_service import LLMRequest
 from finance_app.services.llm_request_queue import VoiceRequestQueue
 from finance_app.services.response_formatter import format_assistant_response
-from finance_app.services.voice.tts_provider import LOCAL_SOURCE_ID, LocalSpeakerSink, NullAudioSink, build_default_provider
+from finance_app.services.voice.tts_provider import (
+    LOCAL_SOURCE_ID,
+    LocalSpeakerSink,
+    NullAudioSink,
+    RemoteSpeakerSink,
+    build_default_provider,
+)
 from finance_app.services.voice.tts_service import TextToSpeechService, speak_typed_enabled, tts_enabled
 from finance_app.services.voice.action_safety import (
     evaluate_voice_command_event,
@@ -5420,9 +5426,18 @@ class MainWindow(QMainWindow):
         self._dispatch_next_queued_assistant_request()
 
     def _build_tts_sink(self, source_id: str):
-        # Remote speaker playback arrives in a later slice; anything non-local stays silent.
         if source_id == LOCAL_SOURCE_ID:
             return LocalSpeakerSink()
+
+        remote_stream = getattr(self.voice_coordinator, "remote_stream", None)
+        if remote_stream is not None:
+            try:
+                connected = remote_stream.connected_source_ids()
+            except Exception:
+                connected = []
+            if source_id in connected:
+                return RemoteSpeakerSink(source_id, remote_stream.send_to_device)
+
         return NullAudioSink()
 
     def _resolve_playback_source(self) -> str | None:

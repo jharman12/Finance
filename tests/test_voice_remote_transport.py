@@ -41,7 +41,7 @@ class _FakePairingManager:
         self.confirmed_calls.append((source_id, self._state.expected_pairing_code))
         return True
 
-from finance_app.services.voice.network_transport import RemoteAudioPacket, RemoteAudioServer
+from finance_app.services.voice.network_transport import AUDIO_FRAME_MAGIC, RemoteAudioPacket, RemoteAudioServer
 
 
 class VoiceRemoteTransportTests(unittest.TestCase):
@@ -82,6 +82,7 @@ class VoiceRemoteTransportTests(unittest.TestCase):
                     {"type": "hello", "source_id": "node-1", "token": issued_token},
                     {
                         "type": "audio",
+                        "magic": AUDIO_FRAME_MAGIC,
                         "seq_no": 1,
                         "audio_b64": base64.b64encode(payload).decode("ascii"),
                         "sent_at_ms": 1234,
@@ -109,6 +110,7 @@ class VoiceRemoteTransportTests(unittest.TestCase):
                     {"type": "hello", "source_id": "node-1", "token": "bad-token"},
                     {
                         "type": "audio",
+                        "magic": AUDIO_FRAME_MAGIC,
                         "seq_no": 1,
                         "audio_b64": base64.b64encode(b"abc").decode("ascii"),
                     },
@@ -143,6 +145,7 @@ class VoiceRemoteTransportTests(unittest.TestCase):
                         json.dumps(
                             {
                                 "type": "audio",
+                                "magic": AUDIO_FRAME_MAGIC,
                                 "seq_no": 1,
                                 "audio_b64": base64.b64encode(b"first").decode("ascii"),
                             }
@@ -172,6 +175,7 @@ class VoiceRemoteTransportTests(unittest.TestCase):
                         {"type": "hello", "source_id": "node-1", "token": issued_token},
                         {
                             "type": "audio",
+                            "magic": AUDIO_FRAME_MAGIC,
                             "seq_no": 2,
                             "audio_b64": base64.b64encode(b"second").decode("ascii"),
                         },
@@ -198,8 +202,8 @@ class VoiceRemoteTransportTests(unittest.TestCase):
                 server.bound_port,
                 [
                     {"type": "hello", "source_id": "node-1", "token": issued_token},
-                    {"type": "audio", "seq_no": 2, "audio_b64": audio_a},
-                    {"type": "audio", "seq_no": 1, "audio_b64": audio_b},
+                    {"type": "audio", "magic": AUDIO_FRAME_MAGIC, "seq_no": 2, "audio_b64": audio_a},
+                    {"type": "audio", "magic": AUDIO_FRAME_MAGIC, "seq_no": 1, "audio_b64": audio_b},
                 ],
             )
             time.sleep(0.1)
@@ -221,6 +225,7 @@ class VoiceRemoteTransportTests(unittest.TestCase):
                     {"type": "hello", "source_id": "node-1", "token": "1234567890abcdef"},
                     {
                         "type": "audio",
+                        "magic": AUDIO_FRAME_MAGIC,
                         "seq_no": 1,
                         "audio_b64": base64.b64encode(b"abc").decode("ascii"),
                     },

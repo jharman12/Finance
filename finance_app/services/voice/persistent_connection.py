@@ -13,6 +13,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
+from finance_app.services.voice.network_transport import AUDIO_FRAME_MAGIC
+
 
 @dataclass(slots=True)
 class ReconnectConfig:
@@ -67,7 +69,9 @@ class PersistentRemoteConnection:
         self._stop_event = threading.Event()
         self._heartbeat_thread: threading.Thread | None = None
         self._reconnect_thread: threading.Thread | None = None
+        self._reader_thread: threading.Thread | None = None
         self._heartbeat_thread_lock = threading.Lock()
+        self._pong_event = threading.Event()
         
         # Session resumption state (Phase 3)
         self.connection_id = ""
@@ -93,6 +97,10 @@ class PersistentRemoteConnection:
             if not self._connect():
                 self._emit_error("Failed to establish initial connection")
                 return False
+
+            # Reader must start after the handshake so it cannot steal the hello_ack line.
+            self._reader_thread = threading.Thread(target=self._reader_loop, daemon=True)
+            self._reader_thread.start()
 
             # Start heartbeat thread
             self._heartbeat_thread = threading.Thread(target=self._heartbeat_loop, daemon=True)
@@ -123,6 +131,8 @@ class PersistentRemoteConnection:
             self._heartbeat_thread.join(timeout=2.0)
         if self._reconnect_thread is not None and self._reconnect_thread.is_alive() and self._reconnect_thread is not current:
             self._reconnect_thread.join(timeout=2.0)
+        if self._reader_thread is not None and self._reader_thread.is_alive() and self._reader_thread is not current:
+            self._reader_thread.join(timeout=2.0)
 
     def send_audio(self, *args, chunk: bytes | None = None, seq_no: int | None = None, audio_b64: str | None = None, sent_at_ms: int | None = None) -> bool:
         """Send an audio frame on the persistent connection.
@@ -150,6 +160,7 @@ class PersistentRemoteConnection:
             seq_no = self._audio_seq_no
         message = {
             "type": "audio",
+            "magic": AUDIO_FRAME_MAGIC,
             "connection_id": self.connection_id,
             "seq_no": seq_no,
             "audio_b64": audio_b64,
@@ -192,7 +203,7 @@ class PersistentRemoteConnection:
             cert_path = Path(self.ca_cert_path)
             if cert_path.name.lower() == "receiver-ca-cert.pem":
                 context.check_hostname = False
-        context.minimum_version = ssl.TLSVersion.TLSv1_2
+        context.minimum_version = ssl.TLSVersion.TLSv1_3
 
         raw_socket = socket.create_connection((self.host, self.port), timeout=5.0)
         try:
@@ -268,40 +279,91 @@ class PersistentRemoteConnection:
         except Exception:
             raise
 
+    def _reader_loop(self) -> None:
+        """Single reader thread: routes pong to the heartbeat event, rest to on_message."""
+        buffer = b""
+        current_socket: ssl.SSLSocket | None = None
+
+        while not self._stop_event.is_set():
+            sock = self._socket if self.connected else None
+            if sock is None:
+                buffer = b""
+                current_socket = None
+                self._stop_event.wait(0.05)
+                continue
+
+            if sock is not current_socket:
+                buffer = b""
+                current_socket = sock
+
+            try:
+                sock.settimeout(0.5)
+                part = sock.recv(65536)
+            except (socket.timeout, ssl.SSLWantReadError):
+                continue
+            except Exception:
+                self._mark_disconnected("reader_error")
+                continue
+
+            if not part:
+                self._mark_disconnected("connection_closed")
+                continue
+
+            buffer += part
+            while b"\n" in buffer:
+                raw_line, buffer = buffer.split(b"\n", 1)
+                self._dispatch_line(raw_line.decode("utf-8", errors="ignore").strip())
+
+    def _dispatch_line(self, line: str) -> None:
+        if not line:
+            return
+        try:
+            message = json.loads(line)
+        except Exception:
+            return
+        if not isinstance(message, dict):
+            return
+
+        if str(message.get("type", "")).lower() == "pong":
+            self._pong_event.set()
+            return
+
+        # Unknown types are handed to the app layer, which must ignore what it does not know.
+        if self.on_message:
+            try:
+                self.on_message(message)
+            except Exception as exc:
+                self._emit_error(f"Message handler error: {exc}")
+
+    def _mark_disconnected(self, reason: str) -> None:
+        with self._lock:
+            if not self.connected:
+                return
+            self.connected = False
+        if self.on_disconnected:
+            self.on_disconnected(reason)
+
     def _heartbeat_loop(self) -> None:
         """Send periodic heartbeats to keep connection alive."""
         interval_sec = self.heartbeat_interval_ms / 1000.0
         
         while not self._stop_event.is_set():
             try:
-                time.sleep(interval_sec)
+                if self._stop_event.wait(interval_sec):
+                    return
                 
                 if self.connected:
+                    self._pong_event.clear()
                     ping_msg = {
                         "type": "ping",
                         "connection_id": self.connection_id,
                     }
                     if not self._send_json(ping_msg):
-                        # Disconnected
-                        with self._lock:
-                            self.connected = False
-                        if self.on_disconnected:
-                            self.on_disconnected("heartbeat_failed")
+                        self._mark_disconnected("heartbeat_failed")
                         continue
 
-                    pong_line = self._receive_line(timeout_seconds=2.0)
-                    if not pong_line:
-                        with self._lock:
-                            self.connected = False
-                        if self.on_disconnected:
-                            self.on_disconnected("heartbeat_timeout")
-                        continue
-
-                    try:
-                        pong_msg = json.loads(pong_line)
-                        if str(pong_msg.get("type", "")).lower() != "pong":
-                            continue
-                    except Exception:
+                    if not self._pong_event.wait(2.0):
+                        self._mark_disconnected("heartbeat_timeout")
                         continue
             
             except Exception as e:
@@ -387,6 +449,10 @@ class PersistentRemoteConnection:
     def close(self) -> None:
         """Compatibility alias for stop()."""
         self.stop()
+
+    def send_message(self, message: dict) -> bool:
+        """Send an arbitrary JSON message on the persistent connection."""
+        return self._send_json(message)
 
     def _send_json(self, message: dict) -> bool:
         """Send JSON message on socket."""

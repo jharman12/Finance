@@ -25,6 +25,7 @@ from finance_app.services.voice.discovery import (
 )
 from finance_app.services.voice.pairing import PairingCodeGenerator
 from finance_app.services.voice.remote_config import RemoteVoiceConfigManager
+from finance_app.services.voice.network_transport import AUDIO_FRAME_MAGIC
 from finance_app.services.voice.persistent_connection import PersistentRemoteConnection, ReconnectConfig
 from finance_app.services.voice.vad_endpointing import VoiceActivityEndpoint
 from finance_app.services.voice.wake_detector import OpenWakeWordDetector, VoskPhraseWakeDetector
@@ -133,7 +134,7 @@ class SecureRemoteAudioConnection:
             context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
             context.check_hostname = False
             context.verify_mode = ssl.CERT_NONE
-        context.minimum_version = ssl.TLSVersion.TLSv1_2
+        context.minimum_version = ssl.TLSVersion.TLSv1_3
 
         _debug(
             f"Connecting to {self.config.host}:{self.config.port} with TLS server name "
@@ -230,6 +231,7 @@ class SecureRemoteAudioConnection:
         self._send_json(
             {
                 "type": "audio",
+                "magic": AUDIO_FRAME_MAGIC,
                 "seq_no": self._seq_no,
                 "sent_at_ms": int(time.time() * 1000),
                 "audio_b64": base64.b64encode(chunk).decode("ascii"),
@@ -253,6 +255,194 @@ class SecureRemoteAudioConnection:
             raise RuntimeError("Remote audio connection is not open.")
         encoded = (json.dumps(payload, ensure_ascii=True) + "\n").encode("utf-8")
         sock.sendall(encoded)
+
+
+@dataclass(slots=True)
+class _SpeechChunk:
+    speech_id: str
+    seq_no: int
+    pcm: bytes
+    sample_rate: int
+    channels: int
+    final: bool
+
+
+class RemoteSpeechPlayer:
+    """Plays PCM pushed by the main PC and acknowledges progress back to it."""
+
+    def __init__(self, send_ack: Callable[[dict[str, object]], bool], max_queued_chunks: int = 256) -> None:
+        self._send_ack = send_ack
+        self._queue: queue.Queue[_SpeechChunk | None] = queue.Queue(maxsize=max_queued_chunks)
+        self._stop_event = threading.Event()
+        self._lock = threading.Lock()
+        self._cancelled: deque[str] = deque(maxlen=16)
+        self._thread: threading.Thread | None = None
+        self._stream = None
+        self._stream_key: tuple[str, int, int] | None = None
+
+    def start(self) -> None:
+        if self._thread is not None and self._thread.is_alive():
+            return
+        self._stop_event.clear()
+        self._thread = threading.Thread(target=self._run, name="remote-speech-player", daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop_event.set()
+        try:
+            self._queue.put_nowait(None)
+        except queue.Full:
+            pass
+        thread = self._thread
+        if thread is not None and thread.is_alive() and thread is not threading.current_thread():
+            thread.join(timeout=2.0)
+        self._thread = None
+        self._close_stream(abort=True)
+
+    def handle_message(self, message: dict) -> None:
+        msg_type = str(message.get("type", "")).lower()
+        if msg_type == "speak":
+            self._enqueue(message)
+        elif msg_type == "speak_cancel":
+            self.cancel(str(message.get("speech_id", "")).strip())
+        # Unknown types are ignored so protocol additions never break playback.
+
+    def cancel(self, speech_id: str) -> None:
+        if not speech_id:
+            return
+        with self._lock:
+            if speech_id not in self._cancelled:
+                self._cancelled.append(speech_id)
+            active = self._stream_key is not None and self._stream_key[0] == speech_id
+        self._drain(speech_id)
+        if active:
+            self._close_stream(abort=True)
+        self._ack(speech_id, 0, "cancelled")
+
+    def _enqueue(self, message: dict) -> None:
+        speech_id = str(message.get("speech_id", "")).strip()
+        if not speech_id:
+            return
+        try:
+            seq_no = int(message.get("seq_no", 0))
+        except Exception:
+            seq_no = 0
+
+        if str(message.get("encoding", "")).lower() != "pcm_s16le":
+            self._ack(speech_id, seq_no, "error")
+            return
+        try:
+            pcm = base64.b64decode(str(message.get("audio_b64", "")), validate=True)
+        except Exception:
+            self._ack(speech_id, seq_no, "error")
+            return
+
+        with self._lock:
+            if speech_id in self._cancelled:
+                return
+
+        chunk = _SpeechChunk(
+            speech_id=speech_id,
+            seq_no=seq_no,
+            pcm=pcm,
+            sample_rate=max(1, int(message.get("sample_rate", 22050) or 22050)),
+            channels=max(1, int(message.get("channels", 1) or 1)),
+            final=bool(message.get("final", False)),
+        )
+        try:
+            self._queue.put_nowait(chunk)
+        except queue.Full:
+            self._ack(speech_id, seq_no, "error")
+
+    def _run(self) -> None:
+        while not self._stop_event.is_set():
+            try:
+                chunk = self._queue.get(timeout=0.2)
+            except queue.Empty:
+                continue
+            if chunk is None:
+                break
+            with self._lock:
+                if chunk.speech_id in self._cancelled:
+                    continue
+            try:
+                self._write(chunk)
+            except Exception as exc:
+                _log(f"Remote speech playback failed: {exc}")
+                self._close_stream(abort=True)
+                self._ack(chunk.speech_id, chunk.seq_no, "error")
+                continue
+
+            if chunk.seq_no == 1:
+                self._ack(chunk.speech_id, chunk.seq_no, "playing")
+            if chunk.final:
+                self._close_stream()
+                self._ack(chunk.speech_id, chunk.seq_no, "done")
+        self._close_stream(abort=True)
+
+    def _write(self, chunk: _SpeechChunk) -> None:
+        key = (chunk.speech_id, chunk.sample_rate, chunk.channels)
+        if self._stream is None or self._stream_key != key:
+            self._close_stream(abort=True)
+            self._open_stream(key)
+        if self._stream is not None and chunk.pcm:
+            self._stream.write(chunk.pcm)
+
+    def _open_stream(self, key: tuple[str, int, int]) -> None:
+        import sounddevice as sd
+
+        stream = sd.RawOutputStream(samplerate=key[1], channels=key[2], dtype="int16")
+        stream.start()
+        with self._lock:
+            self._stream = stream
+            self._stream_key = key
+
+    def _close_stream(self, abort: bool = False) -> None:
+        with self._lock:
+            stream = self._stream
+            self._stream = None
+            self._stream_key = None
+        if stream is None:
+            return
+        try:
+            if abort:
+                stream.abort()
+            else:
+                stream.stop()
+        except Exception:
+            pass
+        try:
+            stream.close()
+        except Exception:
+            pass
+
+    def _drain(self, speech_id: str) -> None:
+        kept: list[_SpeechChunk | None] = []
+        while True:
+            try:
+                pending = self._queue.get_nowait()
+            except queue.Empty:
+                break
+            if pending is None or pending.speech_id != speech_id:
+                kept.append(pending)
+        for item in kept:
+            try:
+                self._queue.put_nowait(item)
+            except queue.Full:
+                break
+
+    def _ack(self, speech_id: str, seq_no: int, state: str) -> None:
+        try:
+            self._send_ack(
+                {
+                    "type": "speak_ack",
+                    "speech_id": speech_id,
+                    "seq_no": seq_no,
+                    "state": state,
+                }
+            )
+        except Exception:
+            pass
 
 
 class RemoteWakeStreamSender:
@@ -285,6 +475,16 @@ class RemoteWakeStreamSender:
         self._last_announced_pairing_code: str | None = None
         self._waiting_for_pair_notice_logged = False
         self._stream_had_speech = False
+        self._speech_player = RemoteSpeechPlayer(self._send_speak_ack)
+
+    def _send_speak_ack(self, message: dict[str, object]) -> bool:
+        connection = self._persistent_connection
+        if connection is None:
+            return False
+        return connection.send_message(message)
+
+    def _on_persistent_message(self, message: dict) -> None:
+        self._speech_player.handle_message(message)
 
     def _ensure_persistent_connection(self) -> PersistentRemoteConnection:
         connection = self._persistent_connection
@@ -306,11 +506,13 @@ class RemoteWakeStreamSender:
         persistent.on_connected = self._on_persistent_connected
         persistent.on_disconnected = self._on_persistent_disconnected
         persistent.on_error = self._on_persistent_error
+        persistent.on_message = self._on_persistent_message
 
         if not persistent.start():
             raise RuntimeError("Failed to establish persistent remote connection.")
 
         self._persistent_connection = persistent
+        self._speech_player.start()
         return persistent
 
     def _on_persistent_connected(self) -> None:
@@ -715,6 +917,7 @@ class RemoteWakeStreamSender:
     def _shutdown_persistent_connection(self) -> None:
         connection = self._persistent_connection
         self._persistent_connection = None
+        self._speech_player.stop()
         if connection is None:
             return
         try:

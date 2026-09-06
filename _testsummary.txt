@@ -1,0 +1,4 @@
+stamp=14:54:01
+modules=tests.test_phase0_baseline,tests.test_voice_discovery,tests.test_voice_endpointing,tests.test_cli_device_management,tests.test_architecture_boundaries
+run=33 failures=0 errors=0
+ok=True

@@ -27,24 +27,24 @@ This document transforms your masterplan vision into a phased, prioritized imple
 #### Week 1: Security Infrastructure & Network Foundation
 
 **Critical Security Implementations (Days 1-2)** - Cyber Handler Priority
-- [ ] Implement mTLS (mutual TLS) with TLS 1.3 only
-- [ ] Deploy per-device authentication tokens with rate limiting (5 req/10s)
-- [ ] Create input frame validation with magic numbers and sequence tracking
-- [ ] Implement 6-digit device pairing code protocol
+- [ ] Implement mTLS (mutual TLS) with TLS 1.3 only (TLS 1.3 minimum enforced on both ends; client certificates deferred - needs a device CA and cert issuance at pairing)
+- [x] Deploy per-device authentication tokens with rate limiting (5 hello attempts / 10s per peer)
+- [x] Create input frame validation with magic numbers and sequence tracking
+- [x] Implement 6-digit device pairing code protocol
 
 **Network Architecture Setup (Days 2-3)** - Network Handler Priority
 - [x] **FIX CRITICAL BUG:** Change service type from `_finance-voice` to `_fvoice` (8 chars max, currently exceeds 15-char limit causing BadTypeInNameException)
 - [x] Implement persistent device token storage
 - [x] Add Windows firewall rule automation (netsh)
 - [x] Create CLI for device management (unpair, list-devices, rotate-token)
-- [ ] Validate hub-and-spoke architecture aligns with production patterns (AirPlay 2 / Google Cast)
+- [x] Validate hub-and-spoke architecture aligns with production patterns (AirPlay 2 / Google Cast) - documented in NETWORK_ARCHITECTURE_GUIDE.md
 
 **Remote Audio Processing Setup (Days 3-4)** - Speech To Text Handler Priority
-- [ ] Design adaptive jitter buffer (40-150ms, 80ms baseline)
-- [ ] Select PCM16 mono/16kHz codec for Phase 1 (optimize to Opus in Phase 3b)
-- [ ] Implement unified audio source adapter (local mic + remote devices)
-- [ ] Create audio quality metrics (SNR, clipping detection)
-- [ ] Validate TLS + JSON protocol (correct for Phase 1; binary optimization available Phase 2)
+- [x] Design adaptive jitter buffer (40-150ms, 80ms baseline) - `finance_app/services/voice/jitter_buffer.py`; not wired into the ingest path because Phase 1 runs over TCP/TLS, which already delivers in order
+- [x] Select PCM16 mono/16kHz codec for Phase 1 (optimize to Opus in Phase 3b)
+- [x] Implement unified audio source adapter (local mic + remote devices)
+- [x] Create audio quality metrics (SNR, clipping detection) - sampled per device and emitted as `audio_quality` diagnostics
+- [x] Validate TLS + JSON protocol (correct for Phase 1; binary optimization available Phase 2)
 
 **Deliverables:**
 - Secure mTLS connection between main PC and remote devices
@@ -94,8 +94,8 @@ This document transforms your masterplan vision into a phased, prioritized imple
 
 **Text-to-Speech Integration** - Speech To Text Handler Priority
 - [x] Integrate TTS with LLM response audio scripts
-- [ ] Implement TTS playback on remote device speakers
-- [x] Create end-to-end voice input → LLM → voice output flow (local; remote pending)
+- [x] Implement TTS playback on remote device speakers
+- [x] Create end-to-end voice input → LLM → voice output flow (local and remote)
 - [ ] Test latency: target LOCAL <2.0s, REMOTE <2.5s (instrumented, needs real-device measurement)
 
 **UI Updates for Remote Voice** - GUI Handler Priority
@@ -114,9 +114,9 @@ This document transforms your masterplan vision into a phased, prioritized imple
 - [ ] Security audit: Pass Cyber Handler's Tier 1 security checklist
 - [ ] Network audit: Pass Network Handler's NETWORK_SECURITY_CHECKLIST
 - [ ] Performance: Validate latency targets (LOCAL <2.0s, REMOTE <2.5s)
-- [ ] Multi-device: Test with 3-4 simultaneous remote devices
+- [ ] Multi-device: Test with 3-4 simultaneous remote devices (automated transport coverage in tests/test_multi_device_concurrency.py; real hardware pending)
 - [ ] Persistence: Restart app, verify devices reconnect without re-pairing
-- [ ] Robustness: Test network interruptions, device disconnections, reconnections
+- [ ] Robustness: Test network interruptions, device disconnections, reconnections (disconnect/reconnect covered in tests/test_multi_device_concurrency.py; real network interruption pending)
 
 **Phase 1 Completion Criteria:**
 - ✅ Remote voice working end-to-end

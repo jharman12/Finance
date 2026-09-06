@@ -1411,3 +1411,37 @@
 {"ts": "2026-09-05T16:24:19.094571+00:00", "event": "voice_command_confirmation_requested", "source_id": "node-2", "session_id": "voice-3", "confidence": 0.72}
 {"ts": "2026-09-05T16:24:19.095644+00:00", "event": "voice_command_canceled", "source_id": "node-2", "session_id": "voice-3", "rejection_text": "cancel"}
 {"ts": "2026-09-05T16:24:19.457425+00:00", "event": "voice_stopped"}
+{"ts": "2026-09-05T18:02:44.736847+00:00", "event": "voice_stopped"}
+{"ts": "2026-09-05T18:02:47.948585+00:00", "event": "voice_stopped"}
+{"ts": "2026-09-05T18:02:51.354319+00:00", "event": "voice_stopped"}
+{"ts": "2026-09-05T18:02:54.585354+00:00", "event": "voice_stopped"}
+{"ts": "2026-09-05T18:02:58.091946+00:00", "event": "voice_stopped"}
+{"ts": "2026-09-05T18:03:01.342960+00:00", "event": "voice_stopped"}
+{"ts": "2026-09-05T18:03:04.747042+00:00", "event": "voice_stopped"}
+{"ts": "2026-09-05T18:03:08.038160+00:00", "event": "voice_stopped"}
+{"ts": "2026-09-05T18:03:11.737172+00:00", "event": "voice_stopped"}
+{"ts": "2026-09-05T18:03:14.974399+00:00", "event": "voice_stopped"}
+{"ts": "2026-09-05T18:03:18.322988+00:00", "event": "voice_stopped"}
+{"ts": "2026-09-05T18:03:21.265497+00:00", "event": "voice_indicator_timeout", "state": "listening"}
+{"ts": "2026-09-05T18:03:24.370402+00:00", "event": "voice_indicator_timeout", "state": "listening"}
+{"ts": "2026-09-05T18:03:24.708670+00:00", "event": "voice_stopped"}
+{"ts": "2026-09-05T18:03:35.279851+00:00", "event": "voice_stopped"}
+{"ts": "2026-09-05T18:03:38.607712+00:00", "event": "voice_stopped"}
+{"ts": "2026-09-05T18:03:41.919424+00:00", "event": "voice_stopped"}
+{"ts": "2026-09-05T18:03:47.096420+00:00", "event": "voice_stopped"}
+{"ts": "2026-09-05T18:03:50.486174+00:00", "event": "voice_stopped"}
+{"ts": "2026-09-05T18:03:54.060002+00:00", "event": "voice_stopped"}
+{"ts": "2026-09-05T18:03:57.376193+00:00", "event": "voice_stopped"}
+{"ts": "2026-09-05T18:04:00.603718+00:00", "event": "voice_stopped"}
+{"ts": "2026-09-05T18:04:03.846239+00:00", "event": "voice_stopped"}
+{"ts": "2026-09-05T18:04:07.119477+00:00", "event": "voice_stopped"}
+{"ts": "2026-09-05T18:04:10.427841+00:00", "event": "voice_stopped"}
+{"ts": "2026-09-05T18:04:14.202223+00:00", "event": "voice_stopped"}
+{"ts": "2026-09-05T18:04:17.424530+00:00", "event": "voice_stopped"}
+{"ts": "2026-09-05T18:04:20.670553+00:00", "event": "voice_stopped"}
+{"ts": "2026-09-05T18:04:23.535534+00:00", "event": "voice_indicator_timeout", "state": "listening"}
+{"ts": "2026-09-05T18:04:26.515781+00:00", "event": "voice_indicator_timeout", "state": "listening"}
+{"ts": "2026-09-05T18:04:26.931669+00:00", "event": "voice_stopped"}
+{"ts": "2026-09-05T18:04:30.656801+00:00", "event": "voice_stopped"}
+{"ts": "2026-09-05T18:04:33.671905+00:00", "event": "voice_stopped"}
+{"ts": "2026-09-05T18:04:36.886203+00:00", "event": "voice_stopped"}
